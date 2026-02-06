@@ -1,7 +1,10 @@
 /**
  * Agent dispatcher — spawn isolated pi subprocesses.
  *
- * Task 1: single dispatch only. Parallel + chain added in Task 2.
+ * Supports three modes:
+ *   - Single: one agent, one task
+ *   - Parallel: multiple agents in parallel with concurrency limit
+ *   - Chain: sequential agents, each receiving previous output via {previous}
  *
  * Based on pi's subagent example (MIT), adapted for superteam's
  * deterministic isolation and TDD guard loading.
@@ -15,6 +18,11 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
 import { getConfig, getPackageDir } from "./config.js";
+
+// --- Constants ---
+
+const MAX_PARALLEL_TASKS = 8;
+const MAX_CONCURRENCY = 4;
 
 // --- Types ---
 
@@ -53,6 +61,7 @@ export interface DispatchResult {
 	model?: string;
 	stopReason?: string;
 	errorMessage?: string;
+	step?: number;
 }
 
 export interface DispatchDetails {
@@ -61,6 +70,59 @@ export interface DispatchDetails {
 }
 
 export type OnUpdateCallback = (partial: AgentToolResult<DispatchDetails>) => void;
+
+// --- Cost tracking ---
+
+/** Session-level cumulative cost tracker */
+let sessionCostUsd = 0;
+
+export function getSessionCost(): number {
+	return sessionCostUsd;
+}
+
+export function resetSessionCost(): void {
+	sessionCostUsd = 0;
+}
+
+function addCost(cost: number): void {
+	sessionCostUsd += cost;
+}
+
+export interface CostCheckResult {
+	allowed: boolean;
+	warning?: string;
+	currentCost: number;
+	limit: number;
+}
+
+/**
+ * Check if a dispatch is within cost budget.
+ * Returns warning if past warn threshold, blocks if past hard limit.
+ */
+export function checkCostBudget(cwd: string): CostCheckResult {
+	const config = getConfig(cwd);
+	const current = sessionCostUsd;
+
+	if (current >= config.costs.hardLimitUsd) {
+		return {
+			allowed: false,
+			warning: `Hard cost limit reached: $${current.toFixed(2)} / $${config.costs.hardLimitUsd.toFixed(2)}. Use /team --override-cost to continue.`,
+			currentCost: current,
+			limit: config.costs.hardLimitUsd,
+		};
+	}
+
+	if (current >= config.costs.warnAtUsd) {
+		return {
+			allowed: true,
+			warning: `Cost warning: $${current.toFixed(2)} / $${config.costs.hardLimitUsd.toFixed(2)} hard limit`,
+			currentCost: current,
+			limit: config.costs.hardLimitUsd,
+		};
+	}
+
+	return { allowed: true, currentCost: current, limit: config.costs.hardLimitUsd };
+}
 
 // --- Agent discovery ---
 
@@ -111,7 +173,6 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentProfile[] {
 
 /**
  * Discover agents from package, user, and optionally project directories.
- * Package agents are always included. Project agents require explicit opt-in.
  */
 export function discoverAgents(
 	cwd: string,
@@ -121,7 +182,6 @@ export function discoverAgents(
 	const packageAgentsDir = path.join(packageDir, "agents");
 	const userDir = path.join(os.homedir(), ".pi", "agent", "agents");
 
-	// Find project agents dir
 	let projectAgentsDir: string | null = null;
 	let searchDir = path.resolve(cwd);
 	while (true) {
@@ -140,12 +200,8 @@ export function discoverAgents(
 	}
 
 	const agentMap = new Map<string, AgentProfile>();
-
-	// Package agents first (lowest priority — overridable)
 	for (const a of loadAgentsFromDir(packageAgentsDir, "package")) agentMap.set(a.name, a);
-	// User agents override package
 	for (const a of loadAgentsFromDir(userDir, "user")) agentMap.set(a.name, a);
-	// Project agents override all (if enabled)
 	if (includeProject && projectAgentsDir) {
 		for (const a of loadAgentsFromDir(projectAgentsDir, "project")) agentMap.set(a.name, a);
 	}
@@ -175,36 +231,23 @@ function getFinalOutput(messages: Message[]): string {
 	return "";
 }
 
-/**
- * Build subprocess args for an agent dispatch.
- * Applies deterministic isolation then explicit add-backs.
- */
 function buildSubprocessArgs(agent: AgentProfile, cwd: string): string[] {
 	const config = getConfig(cwd);
 	const packageDir = getPackageDir();
 
-	// Resolve model: agent profile → config override → config default
 	const model =
 		config.agents.modelOverrides[agent.name] ||
 		agent.model ||
 		(agent.name === "scout" ? config.agents.scoutModel : config.agents.defaultModel);
 
 	const args: string[] = [
-		"--mode",
-		"json",
-		"-p",
-		"--no-session",
-		// Deterministic isolation
-		"--no-extensions",
-		"--no-skills",
-		"--no-prompt-templates",
-		"--no-themes",
+		"--mode", "json", "-p", "--no-session",
+		"--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes",
 	];
 
 	if (model) args.push("--model", model);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
-	// Explicit add-backs based on agent type
 	if (agent.extraFlags) {
 		args.push(...agent.extraFlags);
 	}
@@ -213,27 +256,22 @@ function buildSubprocessArgs(agent: AgentProfile, cwd: string): string[] {
 	if (agent.name === "implementer") {
 		const extensionPath = path.join(packageDir, "src", "index.ts");
 		const skillPath = path.join(packageDir, "skills", "test-driven-development", "SKILL.md");
-
-		if (fs.existsSync(extensionPath)) {
-			args.push("-e", extensionPath);
-		}
-		if (fs.existsSync(skillPath)) {
-			args.push("--skill", skillPath);
-		}
+		if (fs.existsSync(extensionPath)) args.push("-e", extensionPath);
+		if (fs.existsSync(skillPath)) args.push("--skill", skillPath);
 	}
 
 	return args;
 }
 
-/**
- * Dispatch a single agent. Returns structured result.
- */
-export async function dispatchAgent(
+// --- Core dispatch (internal) ---
+
+async function runAgent(
 	agent: AgentProfile,
 	task: string,
 	cwd: string,
-	signal?: AbortSignal,
-	onUpdate?: OnUpdateCallback,
+	step: number | undefined,
+	signal: AbortSignal | undefined,
+	onResultUpdate: (result: DispatchResult) => void,
 ): Promise<DispatchResult> {
 	const args = buildSubprocessArgs(agent, cwd);
 
@@ -249,19 +287,10 @@ export async function dispatchAgent(
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 		model: agent.model,
-	};
-
-	const emitUpdate = () => {
-		if (onUpdate) {
-			onUpdate({
-				content: [{ type: "text", text: getFinalOutput(result.messages) || "(running...)" }],
-				details: { mode: "single", results: [result] },
-			});
-		}
+		step,
 	};
 
 	try {
-		// Write system prompt to temp file
 		if (agent.systemPrompt.trim()) {
 			const tmp = writePromptToTempFile(agent.name, agent.systemPrompt);
 			tmpPromptDir = tmp.dir;
@@ -269,16 +298,12 @@ export async function dispatchAgent(
 			args.push("--append-system-prompt", tmpPromptPath);
 		}
 
-		// Task goes last
 		args.push(`Task: ${task}`);
-
 		let wasAborted = false;
 
 		const exitCode = await new Promise<number>((resolve) => {
 			const proc = spawn("pi", args, {
-				cwd,
-				shell: false,
-				stdio: ["ignore", "pipe", "pipe"],
+				cwd, shell: false, stdio: ["ignore", "pipe", "pipe"],
 			});
 
 			let buffer = "";
@@ -286,13 +311,8 @@ export async function dispatchAgent(
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
 				let event: any;
-				try {
-					event = JSON.parse(line);
-				} catch {
-					return;
-				}
+				try { event = JSON.parse(line); } catch { return; }
 
-				// message_end: assistant turn complete
 				if (event.type === "message_end" && event.message) {
 					const msg = event.message as Message;
 					result.messages.push(msg);
@@ -311,14 +331,22 @@ export async function dispatchAgent(
 						if (!result.model && msg.model) result.model = msg.model;
 						if (msg.stopReason) result.stopReason = msg.stopReason;
 						if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+
+						// Track cost mid-stream for hard limit abort
+						addCost(usage?.cost?.total || 0);
+						const config = getConfig(cwd);
+						if (sessionCostUsd >= config.costs.hardLimitUsd) {
+							wasAborted = true;
+							proc.kill("SIGTERM");
+							setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000);
+						}
 					}
-					emitUpdate();
+					onResultUpdate(result);
 				}
 
-				// tool_result_end: tool finished
 				if (event.type === "tool_result_end" && event.message) {
 					result.messages.push(event.message as Message);
-					emitUpdate();
+					onResultUpdate(result);
 				}
 			};
 
@@ -338,17 +366,13 @@ export async function dispatchAgent(
 				resolve(code ?? 0);
 			});
 
-			proc.on("error", () => {
-				resolve(1);
-			});
+			proc.on("error", () => resolve(1));
 
 			if (signal) {
 				const killProc = () => {
 					wasAborted = true;
 					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
+					setTimeout(() => { if (!proc.killed) proc.kill("SIGKILL"); }, 5000);
 				};
 				if (signal.aborted) killProc();
 				else signal.addEventListener("abort", killProc, { once: true });
@@ -356,9 +380,11 @@ export async function dispatchAgent(
 		});
 
 		result.exitCode = exitCode;
-		if (wasAborted) {
+		if (wasAborted && !result.errorMessage) {
 			result.exitCode = 1;
-			result.errorMessage = "Subagent was aborted";
+			result.errorMessage = sessionCostUsd >= getConfig(cwd).costs.hardLimitUsd
+				? `Aborted: hard cost limit ($${getConfig(cwd).costs.hardLimitUsd}) reached`
+				: "Subagent was aborted";
 		}
 		return result;
 	} finally {
@@ -367,13 +393,149 @@ export async function dispatchAgent(
 	}
 }
 
-// --- Utility exports ---
+// --- Public dispatch functions ---
+
+/**
+ * Dispatch a single agent.
+ */
+export async function dispatchAgent(
+	agent: AgentProfile,
+	task: string,
+	cwd: string,
+	signal?: AbortSignal,
+	onUpdate?: OnUpdateCallback,
+): Promise<DispatchResult> {
+	return runAgent(agent, task, cwd, undefined, signal, (r) => {
+		if (onUpdate) {
+			onUpdate({
+				content: [{ type: "text", text: getFinalOutput(r.messages) || "(running...)" }],
+				details: { mode: "single", results: [r] },
+			});
+		}
+	});
+}
+
+/**
+ * Dispatch multiple agents in parallel with concurrency limit.
+ */
+export async function dispatchParallel(
+	agents: AgentProfile[],
+	tasks: string[],
+	cwd: string,
+	signal?: AbortSignal,
+	onUpdate?: OnUpdateCallback,
+): Promise<DispatchResult[]> {
+	if (agents.length !== tasks.length) {
+		throw new Error(`Agent count (${agents.length}) must match task count (${tasks.length})`);
+	}
+	if (agents.length > MAX_PARALLEL_TASKS) {
+		throw new Error(`Too many parallel tasks (${agents.length}). Max is ${MAX_PARALLEL_TASKS}.`);
+	}
+
+	// Initialize placeholder results
+	const allResults: DispatchResult[] = agents.map((a, i) => ({
+		agent: a.name,
+		agentSource: a.source,
+		task: tasks[i],
+		exitCode: -1, // -1 = still running
+		messages: [],
+		stderr: "",
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+	}));
+
+	const emitUpdate = () => {
+		if (onUpdate) {
+			const running = allResults.filter((r) => r.exitCode === -1).length;
+			const done = allResults.filter((r) => r.exitCode !== -1).length;
+			onUpdate({
+				content: [{ type: "text", text: `Parallel: ${done}/${allResults.length} done, ${running} running...` }],
+				details: { mode: "parallel", results: [...allResults] },
+			});
+		}
+	};
+
+	const results = await mapWithConcurrencyLimit(
+		agents.map((a, i) => ({ agent: a, task: tasks[i], index: i })),
+		MAX_CONCURRENCY,
+		async ({ agent, task, index }) => {
+			const result = await runAgent(agent, task, cwd, undefined, signal, (r) => {
+				allResults[index] = r;
+				emitUpdate();
+			});
+			allResults[index] = result;
+			emitUpdate();
+			return result;
+		},
+	);
+
+	return results;
+}
+
+/**
+ * Dispatch agents in sequence, passing each output to the next via {previous}.
+ */
+export async function dispatchChain(
+	agents: AgentProfile[],
+	tasks: string[],
+	cwd: string,
+	signal?: AbortSignal,
+	onUpdate?: OnUpdateCallback,
+): Promise<DispatchResult[]> {
+	if (agents.length !== tasks.length) {
+		throw new Error(`Agent count (${agents.length}) must match task count (${tasks.length})`);
+	}
+
+	const results: DispatchResult[] = [];
+	let previousOutput = "";
+
+	for (let i = 0; i < agents.length; i++) {
+		const taskWithContext = tasks[i].replace(/\{previous\}/g, previousOutput);
+
+		const result = await runAgent(agents[i], taskWithContext, cwd, i + 1, signal, (r) => {
+			if (onUpdate) {
+				const allResults = [...results, r];
+				onUpdate({
+					content: [{ type: "text", text: getFinalOutput(r.messages) || "(running...)" }],
+					details: { mode: "chain", results: allResults },
+				});
+			}
+		});
+
+		results.push(result);
+
+		const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+		if (isError) break; // Stop chain on error
+
+		previousOutput = getFinalOutput(result.messages);
+	}
+
+	return results;
+}
+
+// --- Utilities ---
+
+async function mapWithConcurrencyLimit<TIn, TOut>(
+	items: TIn[],
+	concurrency: number,
+	fn: (item: TIn, index: number) => Promise<TOut>,
+): Promise<TOut[]> {
+	if (items.length === 0) return [];
+	const limit = Math.max(1, Math.min(concurrency, items.length));
+	const results: TOut[] = new Array(items.length);
+	let nextIndex = 0;
+	const workers = new Array(limit).fill(null).map(async () => {
+		while (true) {
+			const current = nextIndex++;
+			if (current >= items.length) return;
+			results[current] = await fn(items[current], current);
+		}
+	});
+	await Promise.all(workers);
+	return results;
+}
 
 export { getFinalOutput };
 
-/**
- * Format token count for display.
- */
 export function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
@@ -381,9 +543,6 @@ export function formatTokens(count: number): string {
 	return `${(count / 1000000).toFixed(1)}M`;
 }
 
-/**
- * Format usage stats for display.
- */
 export function formatUsage(usage: UsageStats, model?: string): string {
 	const parts: string[] = [];
 	if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
@@ -392,4 +551,17 @@ export function formatUsage(usage: UsageStats, model?: string): string {
 	if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
 	if (model) parts.push(model);
 	return parts.join(" ");
+}
+
+export function aggregateUsage(results: DispatchResult[]): UsageStats {
+	const total: UsageStats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
+	for (const r of results) {
+		total.input += r.usage.input;
+		total.output += r.usage.output;
+		total.cacheRead += r.usage.cacheRead;
+		total.cacheWrite += r.usage.cacheWrite;
+		total.cost += r.usage.cost;
+		total.turns += r.usage.turns;
+	}
+	return total;
 }

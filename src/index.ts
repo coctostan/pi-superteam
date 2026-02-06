@@ -3,35 +3,60 @@
  *
  * Thin composition root: registers tools, commands, shortcuts, events.
  * All business logic lives in dispatch, config, guard, rules, state modules.
- *
- * Task 1: team tool (single mode), /team command, agent discovery.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { getConfig, getPackageDir } from "./config.js";
 import {
 	type AgentProfile,
 	type DispatchDetails,
 	type DispatchResult,
+	aggregateUsage,
+	checkCostBudget,
 	discoverAgents,
 	dispatchAgent,
+	dispatchChain,
+	dispatchParallel,
 	formatTokens,
 	formatUsage,
 	getFinalOutput,
+	getSessionCost,
+	resetSessionCost,
 } from "./dispatch.js";
 
 export default function superteam(pi: ExtensionAPI) {
 	// --- team tool ---
 
+	const TaskItem = Type.Object({
+		agent: Type.String({ description: "Name of the agent to invoke" }),
+		task: Type.String({ description: "Task to delegate to the agent" }),
+	});
+
+	const ChainItem = Type.Object({
+		agent: Type.String({ description: "Name of the agent to invoke" }),
+		task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
+	});
+
 	const TeamParams = Type.Object({
-		agent: Type.Optional(Type.String({ description: "Name of the agent to dispatch" })),
-		task: Type.Optional(Type.String({ description: "Task description for the agent" })),
-		// Parallel and chain modes added in Task 2
+		// Single mode
+		agent: Type.Optional(Type.String({ description: "Name of the agent to dispatch (single mode)" })),
+		task: Type.Optional(Type.String({ description: "Task description (single mode)" })),
+		// Parallel mode
+		tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
+		// Chain mode
+		chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution. Use {previous} in task to reference prior output." })),
+		// Options
 		includeProjectAgents: Type.Optional(
 			Type.Boolean({
 				description: "Include project-local agents from .pi/agents/. Default: false.",
+				default: false,
+			}),
+		),
+		overrideCostLimit: Type.Optional(
+			Type.Boolean({
+				description: "Override hard cost limit for this dispatch. Default: false.",
 				default: false,
 			}),
 		),
@@ -42,10 +67,10 @@ export default function superteam(pi: ExtensionAPI) {
 		label: "Team",
 		description: [
 			"Dispatch specialized agents with isolated context windows.",
+			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
 			"Each agent runs in its own pi subprocess with specific model, tools, and system prompt.",
-			"Available agents include: scout (fast reconnaissance), implementer (TDD implementation),",
+			"Available agents include: scout (fast recon), implementer (TDD implementation),",
 			"and any user-defined agents in ~/.pi/agent/agents/.",
-			"Use includeProjectAgents: true to also load agents from .pi/agents/ (requires trust).",
 		].join(" "),
 		parameters: TeamParams,
 
@@ -53,103 +78,245 @@ export default function superteam(pi: ExtensionAPI) {
 			const includeProject = params.includeProjectAgents ?? false;
 			const { agents, projectAgentsDir } = discoverAgents(ctx.cwd, includeProject);
 
-			const makeDetails = (results: DispatchResult[]): DispatchDetails => ({
-				mode: "single",
-				results,
-			});
+			// Determine mode
+			const hasChain = (params.chain?.length ?? 0) > 0;
+			const hasTasks = (params.tasks?.length ?? 0) > 0;
+			const hasSingle = Boolean(params.agent && params.task);
+			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
 
-			// Validate: need agent + task
-			if (!params.agent || !params.task) {
+			if (modeCount !== 1) {
 				const available =
 					agents.map((a) => `  ${a.name} (${a.source}): ${a.description}`).join("\n") || "  (none found)";
 				return {
-					content: [
-						{
-							type: "text",
-							text: `Provide agent and task.\n\nAvailable agents:\n${available}`,
-						},
-					],
-					details: makeDetails([]),
+					content: [{
+						type: "text",
+						text: `Provide exactly one mode: single (agent+task), parallel (tasks), or chain.\n\nAvailable agents:\n${available}`,
+					}],
+					details: { mode: "single", results: [] } as DispatchDetails,
 				};
 			}
 
-			// Find the agent
-			const agent = agents.find((a) => a.name === params.agent);
-			if (!agent) {
-				const available =
-					agents.map((a) => `  ${a.name} (${a.source}): ${a.description}`).join("\n") || "  (none found)";
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Unknown agent: "${params.agent}"\n\nAvailable agents:\n${available}`,
-						},
-					],
-					details: makeDetails([]),
-					isError: true,
-				};
+			// Cost check (unless overridden)
+			if (!params.overrideCostLimit) {
+				const costCheck = checkCostBudget(ctx.cwd);
+				if (!costCheck.allowed) {
+					return {
+						content: [{ type: "text", text: costCheck.warning! }],
+						details: { mode: "single", results: [] } as DispatchDetails,
+						isError: true,
+					};
+				}
+				if (costCheck.warning && ctx.hasUI) {
+					ctx.ui.notify(costCheck.warning, "warning");
+				}
 			}
+
+			// Resolve agent by name, with error handling
+			const resolveAgent = (name: string): AgentProfile | string => {
+				const agent = agents.find((a) => a.name === name);
+				if (!agent) {
+					const available = agents.map((a) => a.name).join(", ") || "none";
+					return `Unknown agent: "${name}". Available: ${available}`;
+				}
+				if (agent.source === "project" && !ctx.hasUI) {
+					return `Project agent "${name}" not available in non-interactive mode.`;
+				}
+				return agent;
+			};
 
 			// Trust confirmation for project agents
-			if (agent.source === "project" && ctx.hasUI) {
+			const confirmProjectAgents = async (agentNames: string[]): Promise<string | null> => {
+				if (!ctx.hasUI) return null;
+				const projectNames = agentNames
+					.map((n) => agents.find((a) => a.name === n))
+					.filter((a): a is AgentProfile => a?.source === "project")
+					.map((a) => a.name);
+				if (projectNames.length === 0) return null;
+
 				const ok = await ctx.ui.confirm(
-					"Run project-local agent?",
-					`Agent: ${agent.name}\nSource: ${agent.filePath}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+					"Run project-local agents?",
+					`Agents: ${projectNames.join(", ")}\nProject agents are repo-controlled. Only continue for trusted repositories.`,
 				);
-				if (!ok) {
+				return ok ? null : "Cancelled: project agents not approved.";
+			};
+
+			// --- CHAIN MODE ---
+			if (params.chain && params.chain.length > 0) {
+				const chainAgents: AgentProfile[] = [];
+				const chainTasks: string[] = [];
+
+				for (const step of params.chain) {
+					const resolved = resolveAgent(step.agent);
+					if (typeof resolved === "string") {
+						return {
+							content: [{ type: "text", text: resolved }],
+							details: { mode: "chain", results: [] } as DispatchDetails,
+							isError: true,
+						};
+					}
+					chainAgents.push(resolved);
+					chainTasks.push(step.task);
+				}
+
+				const cancelMsg = await confirmProjectAgents(params.chain.map((s) => s.agent));
+				if (cancelMsg) {
 					return {
-						content: [{ type: "text", text: "Cancelled: project agent not approved." }],
-						details: makeDetails([]),
+						content: [{ type: "text", text: cancelMsg }],
+						details: { mode: "chain", results: [] } as DispatchDetails,
+					};
+				}
+
+				const results = await dispatchChain(chainAgents, chainTasks, ctx.cwd, signal, onUpdate);
+				const lastResult = results[results.length - 1];
+				const output = lastResult ? getFinalOutput(lastResult.messages) : "(no output)";
+				const successCount = results.filter((r) => r.exitCode === 0).length;
+				const totalUsage = aggregateUsage(results);
+
+				const isError = successCount < results.length;
+				const summary = isError
+					? `Chain stopped at step ${results.length}/${params.chain.length}: ${lastResult?.errorMessage || "error"}`
+					: output;
+
+				return {
+					content: [{ type: "text", text: summary || "(no output)" }],
+					details: { mode: "chain", results } as DispatchDetails,
+					isError,
+				};
+			}
+
+			// --- PARALLEL MODE ---
+			if (params.tasks && params.tasks.length > 0) {
+				const parallelAgents: AgentProfile[] = [];
+				const parallelTasks: string[] = [];
+
+				for (const t of params.tasks) {
+					const resolved = resolveAgent(t.agent);
+					if (typeof resolved === "string") {
+						return {
+							content: [{ type: "text", text: resolved }],
+							details: { mode: "parallel", results: [] } as DispatchDetails,
+							isError: true,
+						};
+					}
+					parallelAgents.push(resolved);
+					parallelTasks.push(t.task);
+				}
+
+				const cancelMsg = await confirmProjectAgents(params.tasks.map((t) => t.agent));
+				if (cancelMsg) {
+					return {
+						content: [{ type: "text", text: cancelMsg }],
+						details: { mode: "parallel", results: [] } as DispatchDetails,
+					};
+				}
+
+				try {
+					const results = await dispatchParallel(parallelAgents, parallelTasks, ctx.cwd, signal, onUpdate);
+					const successCount = results.filter((r) => r.exitCode === 0).length;
+					const totalUsage = aggregateUsage(results);
+
+					const summaries = results.map((r) => {
+						const output = getFinalOutput(r.messages);
+						const preview = output.slice(0, 200) + (output.length > 200 ? "..." : "");
+						return `[${r.agent}] ${r.exitCode === 0 ? "✓" : "✗"}: ${preview || "(no output)"}`;
+					});
+
+					return {
+						content: [{
+							type: "text",
+							text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+						}],
+						details: { mode: "parallel", results } as DispatchDetails,
+					};
+				} catch (e: any) {
+					return {
+						content: [{ type: "text", text: `Parallel dispatch error: ${e.message}` }],
+						details: { mode: "parallel", results: [] } as DispatchDetails,
+						isError: true,
 					};
 				}
 			}
 
-			// No project agents in headless mode
-			if (agent.source === "project" && !ctx.hasUI) {
+			// --- SINGLE MODE ---
+			if (params.agent && params.task) {
+				const resolved = resolveAgent(params.agent);
+				if (typeof resolved === "string") {
+					return {
+						content: [{ type: "text", text: resolved }],
+						details: { mode: "single", results: [] } as DispatchDetails,
+						isError: true,
+					};
+				}
+
+				if (resolved.source === "project" && ctx.hasUI) {
+					const ok = await ctx.ui.confirm(
+						"Run project-local agent?",
+						`Agent: ${resolved.name}\nSource: ${resolved.filePath}\nProject agents are repo-controlled.`,
+					);
+					if (!ok) {
+						return {
+							content: [{ type: "text", text: "Cancelled: project agent not approved." }],
+							details: { mode: "single", results: [] } as DispatchDetails,
+						};
+					}
+				}
+
+				const result = await dispatchAgent(resolved, params.task, ctx.cwd, signal,
+					onUpdate ? (partial) => onUpdate(partial) : undefined,
+				);
+
+				const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+				const output = getFinalOutput(result.messages);
+
+				if (isError) {
+					const errorMsg = result.errorMessage || result.stderr || output || "(no output)";
+					return {
+						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
+						details: { mode: "single", results: [result] } as DispatchDetails,
+						isError: true,
+					};
+				}
+
 				return {
-					content: [
-						{
-							type: "text",
-							text: `Project agent "${agent.name}" not available in non-interactive mode.`,
-						},
-					],
-					details: makeDetails([]),
-					isError: true,
+					content: [{ type: "text", text: output || "(no output)" }],
+					details: { mode: "single", results: [result] } as DispatchDetails,
 				};
 			}
 
-			// Dispatch
-			const result = await dispatchAgent(
-				agent,
-				params.task,
-				ctx.cwd,
-				signal,
-				onUpdate
-					? (partial) => {
-							onUpdate(partial);
-						}
-					: undefined,
-			);
-
-			const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-			const output = getFinalOutput(result.messages);
-
-			if (isError) {
-				const errorMsg = result.errorMessage || result.stderr || output || "(no output)";
-				return {
-					content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
-					details: makeDetails([result]),
-					isError: true,
-				};
-			}
-
+			// Should not reach here
 			return {
-				content: [{ type: "text", text: output || "(no output)" }],
-				details: makeDetails([result]),
+				content: [{ type: "text", text: "Invalid parameters." }],
+				details: { mode: "single", results: [] } as DispatchDetails,
 			};
 		},
 
 		renderCall(args, theme) {
+			if (args.chain && args.chain.length > 0) {
+				let text =
+					theme.fg("toolTitle", theme.bold("team ")) +
+					theme.fg("accent", `chain (${args.chain.length} steps)`);
+				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
+					const step = args.chain[i];
+					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
+					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
+					text += `\n  ${theme.fg("muted", `${i + 1}.`)} ${theme.fg("accent", step.agent)}${theme.fg("dim", ` ${preview}`)}`;
+				}
+				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
+				return new Text(text, 0, 0);
+			}
+
+			if (args.tasks && args.tasks.length > 0) {
+				let text =
+					theme.fg("toolTitle", theme.bold("team ")) +
+					theme.fg("accent", `parallel (${args.tasks.length} tasks)`);
+				for (const t of args.tasks.slice(0, 3)) {
+					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
+					text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+				}
+				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
+				return new Text(text, 0, 0);
+			}
+
 			const agentName = args.agent || "...";
 			const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
 			let text = theme.fg("toolTitle", theme.bold("team ")) + theme.fg("accent", agentName);
@@ -164,33 +331,149 @@ export default function superteam(pi: ExtensionAPI) {
 				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 			}
 
-			const r = details.results[0];
-			const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
-			const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
-			const output = getFinalOutput(r.messages);
-			const usageStr = formatUsage(r.usage, r.model);
+			// --- Single mode ---
+			if (details.mode === "single" && details.results.length === 1) {
+				const r = details.results[0];
+				const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
+				const output = getFinalOutput(r.messages);
+				const usageStr = formatUsage(r.usage, r.model);
 
-			let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
-			if (isError && r.errorMessage) {
-				text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
-			} else if (output) {
-				const preview = expanded ? output : output.split("\n").slice(0, 10).join("\n");
-				text += `\n${theme.fg("toolOutput", preview)}`;
-				if (!expanded && output.split("\n").length > 10) {
-					text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
+				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+				if (isError && r.errorMessage) {
+					text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
+				} else if (output) {
+					const preview = expanded ? output : output.split("\n").slice(0, 10).join("\n");
+					text += `\n${theme.fg("toolOutput", preview)}`;
+					if (!expanded && output.split("\n").length > 10) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
+				} else {
+					text += `\n${theme.fg("muted", "(no output)")}`;
 				}
-			} else {
-				text += `\n${theme.fg("muted", "(no output)")}`;
+				if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
+				return new Text(text, 0, 0);
 			}
-			if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
-			return new Text(text, 0, 0);
+
+			// --- Chain mode ---
+			if (details.mode === "chain") {
+				const successCount = details.results.filter((r) => r.exitCode === 0).length;
+				const icon = successCount === details.results.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
+
+				if (expanded) {
+					const container = new Container();
+					container.addChild(new Text(
+						`${icon} ${theme.fg("toolTitle", theme.bold("chain "))}${theme.fg("accent", `${successCount}/${details.results.length} steps`)}`,
+						0, 0,
+					));
+
+					for (const r of details.results) {
+						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const output = getFinalOutput(r.messages);
+						container.addChild(new Spacer(1));
+						container.addChild(new Text(
+							`${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`,
+							0, 0,
+						));
+						if (output) {
+							container.addChild(new Text(theme.fg("toolOutput", output), 0, 0));
+						}
+						const stepUsage = formatUsage(r.usage, r.model);
+						if (stepUsage) container.addChild(new Text(theme.fg("dim", stepUsage), 0, 0));
+					}
+
+					const totalUsage = formatUsage(aggregateUsage(details.results));
+					if (totalUsage) {
+						container.addChild(new Spacer(1));
+						container.addChild(new Text(theme.fg("dim", `Total: ${totalUsage}`), 0, 0));
+					}
+					return container;
+				}
+
+				// Collapsed chain
+				let text = `${icon} ${theme.fg("toolTitle", theme.bold("chain "))}${theme.fg("accent", `${successCount}/${details.results.length} steps`)}`;
+				for (const r of details.results) {
+					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+					const output = getFinalOutput(r.messages);
+					const preview = output ? output.split("\n").slice(0, 3).join("\n") : "(no output)";
+					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
+					text += `\n${theme.fg("toolOutput", preview)}`;
+				}
+				const totalUsage = formatUsage(aggregateUsage(details.results));
+				if (totalUsage) text += `\n\n${theme.fg("dim", `Total: ${totalUsage}`)}`;
+				text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
+				return new Text(text, 0, 0);
+			}
+
+			// --- Parallel mode ---
+			if (details.mode === "parallel") {
+				const running = details.results.filter((r) => r.exitCode === -1).length;
+				const successCount = details.results.filter((r) => r.exitCode === 0).length;
+				const failCount = details.results.filter((r) => r.exitCode > 0).length;
+				const isRunning = running > 0;
+				const icon = isRunning
+					? theme.fg("warning", "⏳")
+					: failCount > 0 ? theme.fg("warning", "◐") : theme.fg("success", "✓");
+				const status = isRunning
+					? `${successCount + failCount}/${details.results.length} done, ${running} running`
+					: `${successCount}/${details.results.length} tasks`;
+
+				if (expanded && !isRunning) {
+					const container = new Container();
+					container.addChild(new Text(
+						`${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`,
+						0, 0,
+					));
+
+					for (const r of details.results) {
+						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const output = getFinalOutput(r.messages);
+						container.addChild(new Spacer(1));
+						container.addChild(new Text(
+							`${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`,
+							0, 0,
+						));
+						if (output) container.addChild(new Text(theme.fg("toolOutput", output), 0, 0));
+						const taskUsage = formatUsage(r.usage, r.model);
+						if (taskUsage) container.addChild(new Text(theme.fg("dim", taskUsage), 0, 0));
+					}
+
+					const totalUsage = formatUsage(aggregateUsage(details.results));
+					if (totalUsage) {
+						container.addChild(new Spacer(1));
+						container.addChild(new Text(theme.fg("dim", `Total: ${totalUsage}`), 0, 0));
+					}
+					return container;
+				}
+
+				// Collapsed parallel
+				let text = `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`;
+				for (const r of details.results) {
+					const rIcon = r.exitCode === -1
+						? theme.fg("warning", "⏳")
+						: r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+					const output = getFinalOutput(r.messages);
+					const preview = r.exitCode === -1
+						? "(running...)"
+						: output ? output.split("\n").slice(0, 3).join("\n") : "(no output)";
+					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
+					text += `\n${theme.fg("toolOutput", preview)}`;
+				}
+				if (!isRunning) {
+					const totalUsage = formatUsage(aggregateUsage(details.results));
+					if (totalUsage) text += `\n\n${theme.fg("dim", `Total: ${totalUsage}`)}`;
+				}
+				if (!expanded) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
+				return new Text(text, 0, 0);
+			}
+
+			const text = result.content[0];
+			return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 		},
 	});
 
 	// --- /team command ---
 
 	pi.registerCommand("team", {
-		description: "List available agents and their status",
+		description: "List available agents, show session cost",
 		async handler(args, ctx) {
 			const includeProject = args.trim() === "--project" || args.trim() === "-p";
 			const { agents, projectAgentsDir } = discoverAgents(ctx.cwd, includeProject);
@@ -206,20 +489,17 @@ export default function superteam(pi: ExtensionAPI) {
 				return `${a.name} [${a.source}] — ${a.description}\n  model: ${model}, tools: ${tools}`;
 			});
 
-			const header = `Available agents (${agents.length}):`;
-			const projectNote = projectAgentsDir
-				? `\nProject agents dir: ${projectAgentsDir}${!includeProject ? " (use --project to include)" : ""}`
-				: "";
+			const cost = getSessionCost();
+			const config = getConfig(ctx.cwd);
+			const costLine = `\nSession cost: $${cost.toFixed(4)} / $${config.costs.hardLimitUsd.toFixed(2)} limit`;
 
-			ctx.ui.notify(`${header}\n\n${lines.join("\n\n")}${projectNote}`, "info");
+			ctx.ui.notify(`Available agents (${agents.length}):\n\n${lines.join("\n\n")}${costLine}`, "info");
 		},
 	});
 
-	// --- Session start: log config ---
+	// --- Reset cost on new session ---
 
-	pi.on("session_start", (_event, ctx) => {
-		const config = getConfig(ctx.cwd);
-		const packageDir = getPackageDir();
-		// Log is informational only — no user-facing output needed for Task 1
+	pi.on("session_start", () => {
+		resetSessionCost();
 	});
 }
