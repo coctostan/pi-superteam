@@ -525,7 +525,7 @@ export default function superteam(pi: ExtensionAPI) {
 	// --- /sdd command (plan management) ---
 
 	pi.registerCommand("sdd", {
-		description: "SDD workflow: load plan, show status, advance tasks. Usage: /sdd load <file> | /sdd status | /sdd next | /sdd reset",
+		description: "SDD workflow. Usage: /sdd load <file> | /sdd run | /sdd status | /sdd next | /sdd reset",
 		async handler(args, ctx) {
 			const parts = args.trim().split(/\s+/);
 			const sub = parts[0]?.toLowerCase() || "status";
@@ -580,6 +580,51 @@ export default function superteam(pi: ExtensionAPI) {
 					return;
 				}
 
+				case "run": {
+					const { runSddTask } = await import("./workflow/sdd.js");
+					const task = getCurrentTask();
+					if (!task) {
+						ctx.ui.notify("No current task. Use /sdd load <file> first.", "warning");
+						return;
+					}
+
+					ctx.ui.notify(`Starting SDD for Task ${task.id}: ${task.title}`, "info");
+					const result = await runSddTask(ctx, undefined, (msg) => {
+						// Status updates during SDD run
+						if (ctx.hasUI) ctx.ui.notify(msg, "info");
+					});
+
+					if (result.status === "complete") {
+						const { formatUsage, aggregateUsage } = await import("./dispatch.js");
+						ctx.ui.notify(
+							`✓ Task ${result.taskId}: "${result.taskTitle}" completed!\n` +
+							`Reviews: ${result.reviewResults.length} total\n` +
+							`Usage: ${formatUsage(result.totalUsage)}`,
+							"info",
+						);
+
+						// Auto-advance to next task
+						const { advanceTask } = await import("./workflow/state.js");
+						const next = advanceTask();
+						if (next) {
+							ctx.ui.notify(`Next: Task ${next.id}: ${next.title}. Run /sdd run to continue.`, "info");
+						} else {
+							ctx.ui.notify("All tasks complete! 🎉", "info");
+						}
+					} else if (result.status === "escalated") {
+						ctx.ui.notify(
+							`⚠ Task ${result.taskId}: "${result.taskTitle}" — escalated\n\n` +
+							`${result.escalationReason}\n\n` +
+							`Options: fix manually, then /sdd run to retry, or /sdd next to skip.`,
+							"warning",
+						);
+					} else {
+						ctx.ui.notify(`Task ${result.taskId}: aborted — ${result.escalationReason}`, "warning");
+					}
+					updateWidget(ctx);
+					return;
+				}
+
 				case "reset": {
 					const { updateState } = await import("./workflow/state.js");
 					updateState((s) => {
@@ -595,7 +640,7 @@ export default function superteam(pi: ExtensionAPI) {
 				}
 
 				default:
-					ctx.ui.notify("Unknown subcommand. Usage: /sdd load|status|next|reset", "warning");
+					ctx.ui.notify("Unknown subcommand. Usage: /sdd load|run|status|next|reset", "warning");
 			}
 		},
 	});
