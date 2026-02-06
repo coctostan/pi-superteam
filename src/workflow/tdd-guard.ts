@@ -292,6 +292,15 @@ export function handleToolCall(
 	return undefined;
 }
 
+/** Pending ATDD warnings to inject into next tool_result */
+let pendingAtddWarning: string | null = null;
+
+export function consumeAtddWarning(): string | null {
+	const w = pendingAtddWarning;
+	pendingAtddWarning = null;
+	return w;
+}
+
 function checkImplWrite(filePath: string, config: SuperteamConfig, mode: string): ToolCallEventResult | undefined {
 	// Test files always allowed
 	if (isTestFile(filePath, config)) {
@@ -301,6 +310,14 @@ function checkImplWrite(filePath: string, config: SuperteamConfig, mode: string)
 		// If it's an acceptance test, track that too
 		if (isAcceptanceTestFile(filePath, config)) {
 			ensureAcceptanceTestState(filePath).exists = true;
+		}
+
+		// ATDD: warn if writing unit test without acceptance test
+		if (mode === "atdd" && !isAcceptanceTestFile(filePath, config)) {
+			const hasAcceptance = Object.values(tddState.acceptanceTests).some((a) => a.exists);
+			if (!hasAcceptance) {
+				pendingAtddWarning = `ATDD Warning: No acceptance test exists yet. Consider writing an acceptance test (e.g., *.acceptance.test.ts or *.e2e.test.ts) before unit tests to ensure you're building the right thing.`;
+			}
 		}
 
 		return undefined; // ALLOW
@@ -388,6 +405,17 @@ export function handleToolResult(
 ): ToolResultEventResult | undefined {
 	const config = getConfig(ctx.cwd);
 	if (config.tddMode === "off") return undefined;
+
+	// Inject ATDD warnings into write/edit results
+	if (event.toolName === "write" || event.toolName === "edit") {
+		const warning = consumeAtddWarning();
+		if (warning && !event.isError) {
+			const existingText = event.content.map((c) => ("text" in c ? c.text : "")).join("\n");
+			return {
+				content: [{ type: "text", text: `${existingText}\n\n⚠️ ${warning}` }],
+			};
+		}
+	}
 
 	// Only care about bash results (test executions)
 	if (event.toolName !== "bash") return undefined;

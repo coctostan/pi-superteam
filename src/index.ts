@@ -36,6 +36,7 @@ import {
 	updateWidget,
 } from "./workflow/state.js";
 import {
+	consumeAtddWarning,
 	grantBashWriteAllowance,
 	handleToolCall,
 	handleToolResult,
