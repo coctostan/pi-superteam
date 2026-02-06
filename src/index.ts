@@ -35,6 +35,15 @@ import {
 	setTddMode,
 	updateWidget,
 } from "./workflow/state.js";
+import {
+	grantBashWriteAllowance,
+	handleToolCall,
+	handleToolResult,
+	handleUserBash,
+	resetTddState,
+	restoreTddState,
+	serializeTddState,
+} from "./workflow/tdd-guard.js";
 
 export default function superteam(pi: ExtensionAPI) {
 	// --- team tool ---
@@ -585,26 +594,58 @@ export default function superteam(pi: ExtensionAPI) {
 		},
 	});
 
-	// --- /tdd command (toggle TDD mode) ---
+	// --- /tdd command (toggle TDD mode + escape hatch) ---
 
 	pi.registerCommand("tdd", {
-		description: "Toggle TDD mode. Usage: /tdd [off|tdd|atdd]",
+		description: "TDD mode control. Usage: /tdd [off|tdd|atdd] | /tdd allow-bash-write once <reason>",
 		async handler(args, ctx) {
-			const mode = args.trim().toLowerCase() as TddMode;
-			if (mode && ["off", "tdd", "atdd"].includes(mode)) {
-				setTddMode(mode);
-				ctx.ui.notify(`TDD mode: ${mode.toUpperCase()}`, "info");
-			} else if (!args.trim()) {
-				// Toggle: off → tdd → atdd → off
-				const current = getState().tddMode;
-				const next: TddMode = current === "off" ? "tdd" : current === "tdd" ? "atdd" : "off";
-				setTddMode(next);
-				ctx.ui.notify(`TDD mode: ${next.toUpperCase()}`, "info");
-			} else {
-				ctx.ui.notify("Usage: /tdd [off|tdd|atdd]", "warning");
+			const parts = args.trim().split(/\s+/);
+			const sub = parts[0]?.toLowerCase() || "";
+
+			// Toggle or set mode
+			if (!sub || ["off", "tdd", "atdd"].includes(sub)) {
+				if (sub && ["off", "tdd", "atdd"].includes(sub)) {
+					const mode = sub as TddMode;
+					setTddMode(mode);
+					ctx.ui.notify(`TDD mode: ${mode.toUpperCase()}`, "info");
+				} else {
+					const current = getState().tddMode;
+					const next: TddMode = current === "off" ? "tdd" : current === "tdd" ? "atdd" : "off";
+					setTddMode(next);
+					ctx.ui.notify(`TDD mode: ${next.toUpperCase()}`, "info");
+				}
+				updateWidget(ctx);
+				return;
 			}
-			updateWidget(ctx);
+
+			// Bash write allowance escape hatch
+			if (sub === "allow-bash-write" && parts[1]?.toLowerCase() === "once") {
+				const reason = parts.slice(2).join(" ").trim();
+				if (!reason) {
+					ctx.ui.notify("Usage: /tdd allow-bash-write once <reason>", "warning");
+					return;
+				}
+				grantBashWriteAllowance(reason);
+				ctx.ui.notify(`Bash write allowed once: ${reason}`, "info");
+				return;
+			}
+
+			ctx.ui.notify("Usage: /tdd [off|tdd|atdd] | /tdd allow-bash-write once <reason>", "warning");
 		},
+	});
+
+	// --- TDD Guard event handlers ---
+
+	pi.on("tool_call", (event, ctx) => {
+		return handleToolCall(event, ctx);
+	});
+
+	pi.on("tool_result", (event, ctx) => {
+		return handleToolResult(event, ctx);
+	});
+
+	pi.on("user_bash", (event, ctx) => {
+		return handleUserBash(event, ctx);
 	});
 
 	// --- Session lifecycle ---
@@ -613,6 +654,7 @@ export default function superteam(pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => {
 		resetSessionCost();
+		resetTddState();
 		restoreFromBranch(ctx);
 		updateWidget(ctx);
 	});
