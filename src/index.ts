@@ -36,6 +36,11 @@ import {
 	updateWidget,
 } from "./workflow/state.js";
 import {
+	handleContext as handleRuleContext,
+	loadRules,
+	resetRuleStates,
+} from "./rules/engine.js";
+import {
 	consumeAtddWarning,
 	grantBashWriteAllowance,
 	handleToolCall,
@@ -649,13 +654,22 @@ export default function superteam(pi: ExtensionAPI) {
 		return handleUserBash(event, ctx);
 	});
 
+	// --- Rule engine (TTSR-like context injection) ---
+
+	pi.on("context", (event, _ctx) => {
+		return handleRuleContext(event);
+	});
+
 	// --- Session lifecycle ---
 
 	initState(pi);
+	loadRules(); // Initial load (session_start reloads)
 
 	pi.on("session_start", (_event, ctx) => {
 		resetSessionCost();
 		resetTddState();
+		resetRuleStates();
+		loadRules(); // Load rules from package rules/ dir
 		restoreFromBranch(ctx);
 		updateWidget(ctx);
 	});
