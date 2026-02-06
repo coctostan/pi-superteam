@@ -25,6 +25,16 @@ import {
 	getSessionCost,
 	resetSessionCost,
 } from "./dispatch.js";
+import {
+	type TddMode,
+	buildStatusLines,
+	getState,
+	initState,
+	loadPlanIntoState,
+	restoreFromBranch,
+	setTddMode,
+	updateWidget,
+} from "./workflow/state.js";
 
 export default function superteam(pi: ExtensionAPI) {
 	// --- team tool ---
@@ -497,9 +507,113 @@ export default function superteam(pi: ExtensionAPI) {
 		},
 	});
 
-	// --- Reset cost on new session ---
+	// --- /sdd command (plan management) ---
 
-	pi.on("session_start", () => {
+	pi.registerCommand("sdd", {
+		description: "SDD workflow: load plan, show status, advance tasks. Usage: /sdd load <file> | /sdd status | /sdd next | /sdd reset",
+		async handler(args, ctx) {
+			const parts = args.trim().split(/\s+/);
+			const sub = parts[0]?.toLowerCase() || "status";
+
+			switch (sub) {
+				case "load": {
+					const filePath = parts.slice(1).join(" ").trim();
+					if (!filePath) {
+						ctx.ui.notify("Usage: /sdd load <plan-file.md>", "warning");
+						return;
+					}
+					const { count, source } = loadPlanIntoState(filePath);
+					if (count === 0) {
+						ctx.ui.notify(`No tasks found in ${filePath}. Use \`\`\`superteam-tasks block or ### Task N: headings.`, "warning");
+					} else {
+						ctx.ui.notify(`Loaded ${count} tasks from ${filePath} (${source} parser)`, "info");
+					}
+					updateWidget(ctx);
+					return;
+				}
+
+				case "status": {
+					const state = getState();
+					const lines = buildStatusLines();
+					if (lines.length === 0) {
+						ctx.ui.notify("No active workflow. Use /sdd load <file> to load a plan.", "info");
+						return;
+					}
+					const taskLines = state.tasks.map((t, i) => {
+						const marker = i === state.currentTaskIndex ? "→" : t.status === "complete" ? "✓" : " ";
+						return `${marker} ${t.id}. ${t.title} [${t.status}]`;
+					});
+					const cost = state.cumulativeCostUsd > 0 ? `\nCost: $${state.cumulativeCostUsd.toFixed(2)}` : "";
+					ctx.ui.notify(`SDD Status:\n${taskLines.join("\n")}${cost}`, "info");
+					return;
+				}
+
+				case "next": {
+					const { advanceTask, getCurrentTask } = await import("./workflow/state.js");
+					const current = getCurrentTask();
+					if (!current) {
+						ctx.ui.notify("No tasks loaded or all tasks complete.", "info");
+						return;
+					}
+					const next = advanceTask();
+					if (next) {
+						ctx.ui.notify(`Advanced to Task ${next.id}: ${next.title}`, "info");
+					} else {
+						ctx.ui.notify("All tasks complete!", "info");
+					}
+					updateWidget(ctx);
+					return;
+				}
+
+				case "reset": {
+					const { updateState } = await import("./workflow/state.js");
+					updateState((s) => {
+						s.tasks = [];
+						s.currentTaskIndex = -1;
+						s.reviewCycles = [];
+						s.cumulativeCostUsd = 0;
+						s.planFile = undefined;
+					});
+					ctx.ui.notify("SDD state reset.", "info");
+					updateWidget(ctx);
+					return;
+				}
+
+				default:
+					ctx.ui.notify("Unknown subcommand. Usage: /sdd load|status|next|reset", "warning");
+			}
+		},
+	});
+
+	// --- /tdd command (toggle TDD mode) ---
+
+	pi.registerCommand("tdd", {
+		description: "Toggle TDD mode. Usage: /tdd [off|tdd|atdd]",
+		async handler(args, ctx) {
+			const mode = args.trim().toLowerCase() as TddMode;
+			if (mode && ["off", "tdd", "atdd"].includes(mode)) {
+				setTddMode(mode);
+				ctx.ui.notify(`TDD mode: ${mode.toUpperCase()}`, "info");
+			} else if (!args.trim()) {
+				// Toggle: off → tdd → atdd → off
+				const current = getState().tddMode;
+				const next: TddMode = current === "off" ? "tdd" : current === "tdd" ? "atdd" : "off";
+				setTddMode(next);
+				ctx.ui.notify(`TDD mode: ${next.toUpperCase()}`, "info");
+			} else {
+				ctx.ui.notify("Usage: /tdd [off|tdd|atdd]", "warning");
+			}
+			updateWidget(ctx);
+		},
+	});
+
+	// --- Session lifecycle ---
+
+	initState(pi);
+
+	pi.on("session_start", (_event, ctx) => {
 		resetSessionCost();
+		restoreFromBranch(ctx);
+		updateWidget(ctx);
 	});
 }
