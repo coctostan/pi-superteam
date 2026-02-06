@@ -1,0 +1,20 @@
+{
+  "name": "pi-superteam",
+  "version": "0.1.0",
+  "description": "Pi extension: TDD/ATDD enforcement, specialized agent dispatch, iterative review cycles, context-aware rules",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": ["src/index.ts"],
+    "skills": ["skills"],
+    "prompts": ["prompts"]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  }
+}
