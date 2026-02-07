@@ -1,5 +1,5 @@
 ---
-name: Writing Plans
+name: writing-plans
 description: Create structured implementation plans with machine-parseable task blocks
 globs: "**/*.md"
 ---

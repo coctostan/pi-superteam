@@ -1,5 +1,5 @@
 ---
-name: Test-Driven Development
+name: test-driven-development
 description: Write failing tests before implementation code — RED, GREEN, REFACTOR
 globs: "**/*.ts,**/*.tsx,**/*.js,**/*.jsx"
 ---

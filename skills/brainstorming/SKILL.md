@@ -1,5 +1,5 @@
 ---
-name: Brainstorming
+name: brainstorming
 description: Explore design options before committing to an approach
 globs: "**/*"
 ---

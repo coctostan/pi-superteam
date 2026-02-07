@@ -1,5 +1,5 @@
 ---
-name: Acceptance Test-Driven Development
+name: acceptance-test-driven-development
 description: Write acceptance tests before unit tests to ensure you're building the right thing
 globs: "**/*.ts,**/*.tsx,**/*.js,**/*.jsx"
 ---
