@@ -17,7 +17,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
-import { getConfig, getPackageDir } from "./config.js";
+import { getConfig, getPackageDir, VALID_THINKING_LEVELS, type ThinkingLevel, type SuperteamConfig } from "./config.js";
 
 // --- Constants ---
 
@@ -33,6 +33,7 @@ export interface AgentProfile {
 	description: string;
 	tools?: string[];
 	model?: string;
+	thinking?: ThinkingLevel;
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
@@ -157,11 +158,16 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentProfile[] {
 			.map((t: string) => t.trim())
 			.filter(Boolean);
 
+		const thinking = frontmatter.thinking && VALID_THINKING_LEVELS.includes(frontmatter.thinking as ThinkingLevel)
+			? (frontmatter.thinking as ThinkingLevel)
+			: undefined;
+
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model: frontmatter.model,
+			thinking,
 			systemPrompt: body,
 			source,
 			filePath,
@@ -231,14 +237,32 @@ function getFinalOutput(messages: Message[]): string {
 	return "";
 }
 
+/**
+ * Resolve the effective model for an agent using priority chain:
+ * config.agents.modelOverrides[name] > agent.model > scoutModel/defaultModel
+ */
+export function resolveAgentModel(agent: AgentProfile, config: SuperteamConfig): string {
+	return (
+		config.agents.modelOverrides[agent.name] ||
+		agent.model ||
+		(agent.name === "scout" ? config.agents.scoutModel : config.agents.defaultModel)
+	);
+}
+
+/**
+ * Resolve the effective thinking level for an agent using priority chain:
+ * config.agents.thinkingOverrides[name] > agent.thinking > undefined
+ */
+export function resolveAgentThinking(agent: AgentProfile, config: SuperteamConfig): ThinkingLevel | undefined {
+	return config.agents.thinkingOverrides[agent.name] || agent.thinking || undefined;
+}
+
 function buildSubprocessArgs(agent: AgentProfile, cwd: string): string[] {
 	const config = getConfig(cwd);
 	const packageDir = getPackageDir();
 
-	const model =
-		config.agents.modelOverrides[agent.name] ||
-		agent.model ||
-		(agent.name === "scout" ? config.agents.scoutModel : config.agents.defaultModel);
+	const model = resolveAgentModel(agent, config);
+	const thinking = resolveAgentThinking(agent, config);
 
 	const args: string[] = [
 		"--mode", "json", "-p", "--no-session",
@@ -246,6 +270,7 @@ function buildSubprocessArgs(agent: AgentProfile, cwd: string): string[] {
 	];
 
 	if (model) args.push("--model", model);
+	if (thinking) args.push("--thinking", thinking);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
 	if (agent.extraFlags) {
