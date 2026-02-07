@@ -76,7 +76,22 @@ function makeState(overrides: Partial<OrchestratorState> = {}): OrchestratorStat
 	return { ...base, ...overrides };
 }
 
-const fakeCtx = { cwd: "/fake/project" } as any;
+function makeCtx(cwd = "/fake/project") {
+	return {
+		cwd,
+		hasUI: true,
+		ui: {
+			select: vi.fn(),
+			confirm: vi.fn(),
+			input: vi.fn(),
+			notify: vi.fn(),
+			setStatus: vi.fn(),
+			setWidget: vi.fn(),
+		},
+	} as any;
+}
+
+const fakeCtx = makeCtx();
 
 function setupDefaultMocks() {
 	mockCheckCostBudget.mockReturnValue({ allowed: true, currentCost: 0, limit: 10 });
@@ -170,10 +185,12 @@ describe("runExecutePhase", () => {
 				agents: [makeAgent("spec-reviewer"), makeAgent("quality-reviewer")],
 				projectAgentsDir: null,
 			});
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
 			const state = makeState();
-			const result = await runExecutePhase(state, fakeCtx);
-			expect(result.pendingInteraction).toBeDefined();
-			expect(result.pendingInteraction!.id).toBe("task-escalation");
+			const result = await runExecutePhase(state, ctx);
+			expect(ctx.ui.select).toHaveBeenCalled();
+			expect(result.tasks[0].status).toBe("skipped");
 		});
 	});
 
@@ -202,12 +219,15 @@ describe("runExecutePhase", () => {
 		it("escalates when implementer fails (exit code != 0)", async () => {
 			setupDefaultMocks();
 			mockDispatchAgent.mockResolvedValueOnce(makeResult({ exitCode: 1, errorMessage: "compilation error" }));
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
 			const state = makeState();
-			const result = await runExecutePhase(state, fakeCtx);
+			const result = await runExecutePhase(state, ctx);
 
-			expect(result.pendingInteraction).toBeDefined();
-			expect(result.pendingInteraction!.id).toBe("task-escalation");
-			expect(result.pendingInteraction!.question).toContain("Task 1");
+			expect(ctx.ui.select).toHaveBeenCalled();
+			const selectCall = ctx.ui.select.mock.calls[0];
+			expect(selectCall[1]).toEqual(expect.arrayContaining(["Retry", "Skip", "Abort"]));
+			expect(result.tasks[0].status).toBe("skipped");
 		});
 
 		it("accumulates cost from implementer dispatch", async () => {
@@ -269,16 +289,17 @@ describe("runExecutePhase", () => {
 				findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" },
 			});
 
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
 			const state = makeState({
 				config: {
 					tddMode: "tdd", reviewMode: "iterative", executionMode: "auto",
 					batchSize: 3, maxPlanReviewCycles: 3, maxTaskReviewCycles: 2,
 				},
 			});
-			const result = await runExecutePhase(state, fakeCtx);
+			const result = await runExecutePhase(state, ctx);
 
-			expect(result.pendingInteraction).toBeDefined();
-			expect(result.pendingInteraction!.id).toBe("task-escalation");
+			expect(ctx.ui.select).toHaveBeenCalled();
 		});
 
 		it("escalates on inconclusive spec review", async () => {
@@ -289,11 +310,12 @@ describe("runExecutePhase", () => {
 				parseError: "no JSON",
 			});
 
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
 			const state = makeState();
-			const result = await runExecutePhase(state, fakeCtx);
+			const result = await runExecutePhase(state, ctx);
 
-			expect(result.pendingInteraction).toBeDefined();
-			expect(result.pendingInteraction!.id).toBe("task-escalation");
+			expect(ctx.ui.select).toHaveBeenCalled();
 		});
 	});
 
@@ -336,16 +358,17 @@ describe("runExecutePhase", () => {
 				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec passes
 				.mockReturnValue({ status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" } }); // quality always fails
 
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
 			const state = makeState({
 				config: {
 					tddMode: "tdd", reviewMode: "iterative", executionMode: "auto",
 					batchSize: 3, maxPlanReviewCycles: 3, maxTaskReviewCycles: 2,
 				},
 			});
-			const result = await runExecutePhase(state, fakeCtx);
+			const result = await runExecutePhase(state, ctx);
 
-			expect(result.pendingInteraction).toBeDefined();
-			expect(result.pendingInteraction!.id).toBe("task-escalation");
+			expect(ctx.ui.select).toHaveBeenCalled();
 		});
 	});
 
@@ -382,7 +405,6 @@ describe("runExecutePhase", () => {
 			});
 			mockDispatchParallel.mockResolvedValue([makeResult()]);
 			mockGetFinalOutput.mockReturnValue('{"passed":false,"findings":[{"severity":"critical","file":"a.ts","issue":"vuln"}],"mustFix":[],"summary":"critical issue"}');
-			// Override parseReviewOutput for the optional review to return fail with critical
 			mockParseReviewOutput
 				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec
 				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // quality
@@ -392,11 +414,12 @@ describe("runExecutePhase", () => {
 				}); // optional (security)
 			mockHasCriticalFindings.mockReturnValue(true);
 
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
 			const state = makeState();
-			const result = await runExecutePhase(state, fakeCtx);
+			const result = await runExecutePhase(state, ctx);
 
-			expect(result.pendingInteraction).toBeDefined();
-			expect(result.pendingInteraction!.id).toBe("task-escalation");
+			expect(ctx.ui.select).toHaveBeenCalled();
 		});
 
 		it("skips optional reviews when no optional reviewers available", async () => {
@@ -560,6 +583,64 @@ describe("runExecutePhase", () => {
 
 			// At minimum: implementing, reviewing (spec), reviewing (quality), complete, finalize
 			expect(mockSaveState.mock.calls.length).toBeGreaterThanOrEqual(4);
+		});
+	});
+
+	// --- New: UI escalation and streaming ---
+
+	describe("UI escalation", () => {
+		it("calls ctx.ui.select for task escalation (Retry/Skip/Abort)", async () => {
+			setupDefaultMocks();
+			mockDispatchAgent.mockResolvedValue({ ...makeResult(), exitCode: 1, errorMessage: "compilation error" });
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
+
+			const state = makeState({ tasks: [makeTask()] });
+			const result = await runExecutePhase(state, ctx);
+
+			expect(ctx.ui.select).toHaveBeenCalled();
+			const selectCall = ctx.ui.select.mock.calls[0];
+			expect(selectCall[1]).toEqual(expect.arrayContaining(["Retry", "Skip", "Abort"]));
+			expect(result.tasks[0].status).toBe("skipped");
+		});
+
+		it("aborts workflow when user selects Abort on escalation", async () => {
+			setupDefaultMocks();
+			mockDispatchAgent.mockResolvedValue({ ...makeResult(), exitCode: 1, errorMessage: "fail" });
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Abort");
+
+			const state = makeState({ tasks: [makeTask()] });
+			const result = await runExecutePhase(state, ctx);
+
+			expect(result.error).toBeDefined();
+		});
+
+		it("passes onStreamEvent to dispatchAgent and updates status bar", async () => {
+			setupDefaultMocks();
+			const ctx = makeCtx();
+
+			mockDispatchAgent.mockImplementation(async (agent, task, cwd, signal, onUpdate, onStreamEvent) => {
+				if (onStreamEvent) {
+					onStreamEvent({ type: "tool_execution_start", toolName: "read", args: { path: "src/index.ts" } });
+				}
+				return makeResult();
+			});
+
+			const state = makeState({ tasks: [makeTask()], config: { reviewMode: "iterative", executionMode: "auto", tddMode: "tdd", batchSize: 3, maxPlanReviewCycles: 3, maxTaskReviewCycles: 3 } });
+			await runExecutePhase(state, ctx);
+
+			expect(ctx.ui.setStatus).toHaveBeenCalledWith("workflow", expect.stringContaining("read"));
+		});
+
+		it("updates progress widget after task completion", async () => {
+			setupDefaultMocks();
+			const ctx = makeCtx();
+
+			const state = makeState({ tasks: [makeTask(), makeTask({ id: 2, title: "Task 2" })], config: { reviewMode: "iterative", executionMode: "auto", tddMode: "tdd", batchSize: 3, maxPlanReviewCycles: 3, maxTaskReviewCycles: 3 } });
+			await runExecutePhase(state, ctx);
+
+			expect(ctx.ui.setWidget).toHaveBeenCalledWith("workflow-progress", expect.any(Array));
 		});
 	});
 });

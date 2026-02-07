@@ -1,21 +1,24 @@
 import type { OrchestratorState, TaskExecState } from "../orchestrator-state.js";
 import { saveState } from "../orchestrator-state.js";
 import { buildImplPrompt, buildFixPrompt, buildSpecReviewPrompt, buildQualityReviewPrompt, extractPlanContext } from "../prompt-builder.js";
-import { confirmTaskEscalation } from "../interaction.js";
 import { getCurrentSha, computeChangedFiles } from "../git-utils.js";
-import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, type AgentProfile } from "../../dispatch.js";
+import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, type AgentProfile, type OnStreamEvent } from "../../dispatch.js";
 import { parseReviewOutput, formatFindings, hasCriticalFindings, type ReviewFindings, type ParseResult } from "../../review-parser.js";
+import { formatToolAction, formatTaskProgress, createActivityBuffer } from "../ui.js";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 type AgentMap = Map<string, AgentProfile>;
+type Ctx = ExtensionContext | { cwd: string; hasUI?: boolean; ui?: any };
 
 export async function runExecutePhase(
 	state: OrchestratorState,
-	ctx: ExtensionContext | { cwd: string },
+	ctx: Ctx,
 	signal?: AbortSignal,
 	userInput?: string,
 ): Promise<OrchestratorState> {
-	// 0. Handle pending escalation response
+	const ui = (ctx as any).ui;
+
+	// 0. Handle legacy pending escalation response (backward compat)
 	if (state.pendingInteraction && userInput) {
 		const response = userInput.trim().toLowerCase();
 		const task = state.tasks[state.currentTaskIndex];
@@ -31,12 +34,10 @@ export async function runExecutePhase(
 			state.currentTaskIndex++;
 			state.pendingInteraction = undefined;
 			saveState(state, ctx.cwd);
-			// Fall through to continue loop with next task
 		}
 		if (response === "continue") {
 			task.status = "pending";
 			state.pendingInteraction = undefined;
-			// Fall through to re-process this task
 		}
 	}
 
@@ -49,7 +50,6 @@ export async function runExecutePhase(
 	const specReviewer = agentMap.get("spec-reviewer");
 	const qualityReviewer = agentMap.get("quality-reviewer");
 
-	// Optional reviewers
 	const optionalReviewerNames = ["security-reviewer", "performance-reviewer"];
 	const optionalReviewers = optionalReviewerNames
 		.map(name => agentMap.get(name))
@@ -61,14 +61,28 @@ export async function runExecutePhase(
 	// 3. Config
 	const maxRetries = state.config.maxTaskReviewCycles || 3;
 
-	// 4. Task loop
+	// 4. Activity buffer for streaming
+	const activityBuffer = createActivityBuffer(10);
+
+	// Stream event handler
+	const makeOnStreamEvent = (): OnStreamEvent => {
+		return (event) => {
+			if (event.type === "tool_execution_start") {
+				const action = formatToolAction(event);
+				activityBuffer.push(action);
+				ui?.setStatus?.("workflow", action);
+				ui?.setWidget?.("workflow-activity", activityBuffer.lines());
+			}
+		};
+	};
+
+	// 5. Task loop
 	let batchCounter = 0;
 
 	for (let i = state.currentTaskIndex; i < state.tasks.length; i++) {
 		const task = state.tasks[i];
 		state.currentTaskIndex = i;
 
-		// Skip completed/skipped/escalated tasks
 		if (task.status === "complete" || task.status === "skipped" || task.status === "escalated") {
 			continue;
 		}
@@ -84,23 +98,46 @@ export async function runExecutePhase(
 
 		// b. IMPLEMENT
 		if (!implementer) {
-			state.pendingInteraction = confirmTaskEscalation(task.title, "No implementer agent found");
-			saveState(state, ctx.cwd);
-			return state;
+			const escalation = await escalate(task, "No implementer agent found", ui);
+			if (escalation === "abort") {
+				state.error = "Aborted by user";
+				saveState(state, ctx.cwd);
+				return state;
+			}
+			if (escalation === "skip") {
+				task.status = "skipped";
+				saveState(state, ctx.cwd);
+				continue;
+			}
+			// retry — continue loop to try again
+			continue;
 		}
 
 		task.gitShaBeforeImpl = await getCurrentSha(ctx.cwd);
 		task.status = "implementing";
 		saveState(state, ctx.cwd);
 
-		const implResult = await dispatchAgent(implementer, buildImplPrompt(task, planContext), ctx.cwd, signal);
+		const implResult = await dispatchAgent(
+			implementer, buildImplPrompt(task, planContext), ctx.cwd, signal, undefined, makeOnStreamEvent(),
+		);
 		state.totalCostUsd += implResult.usage.cost;
 
 		if (implResult.exitCode !== 0) {
 			const reason = implResult.errorMessage || "Implementation failed (non-zero exit)";
-			state.pendingInteraction = confirmTaskEscalation(task.title, reason);
-			saveState(state, ctx.cwd);
-			return state;
+			const escalation = await escalate(task, reason, ui);
+			if (escalation === "abort") {
+				state.error = "Aborted by user";
+				saveState(state, ctx.cwd);
+				return state;
+			}
+			if (escalation === "skip") {
+				task.status = "skipped";
+				saveState(state, ctx.cwd);
+				continue;
+			}
+			// retry
+			task.status = "pending";
+			continue;
 		}
 
 		// c. CHANGED FILES
@@ -108,16 +145,15 @@ export async function runExecutePhase(
 
 		// d. SPEC REVIEW
 		const specResult = await runReviewLoop(
-			state, task, "spec", specReviewer, implementer, changedFiles, maxRetries, ctx, signal,
+			state, task, "spec", specReviewer, implementer, changedFiles, maxRetries, ctx, signal, ui, makeOnStreamEvent,
 			(t, cf) => buildSpecReviewPrompt(t, cf),
 		);
 		if (specResult === "escalated") return state;
-		// Refresh changed files after potential fixes
 		changedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
 
 		// e. QUALITY REVIEW
 		const qualResult = await runReviewLoop(
-			state, task, "quality", qualityReviewer, implementer, changedFiles, maxRetries, ctx, signal,
+			state, task, "quality", qualityReviewer, implementer, changedFiles, maxRetries, ctx, signal, ui, makeOnStreamEvent,
 			(t, cf) => buildQualityReviewPrompt(t, cf),
 		);
 		if (qualResult === "escalated") return state;
@@ -126,10 +162,7 @@ export async function runExecutePhase(
 		if (optionalReviewers.length > 0) {
 			changedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
 			const optAgents = optionalReviewers;
-			const optTasks = optAgents.map(a => {
-				// Use the same review prompt pattern — security/performance use quality-style prompt
-				return buildQualityReviewPrompt(task, changedFiles);
-			});
+			const optTasks = optAgents.map(() => buildQualityReviewPrompt(task, changedFiles));
 
 			const optResults = await dispatchParallel(optAgents, optTasks, ctx.cwd, signal);
 			for (const r of optResults) {
@@ -146,15 +179,22 @@ export async function runExecutePhase(
 				} else if (parsed.status === "fail") {
 					task.reviewsFailed.push(reviewName);
 					if (hasCriticalFindings(parsed.findings)) {
-						state.pendingInteraction = confirmTaskEscalation(
-							task.title,
-							`Critical findings from ${reviewName}`,
-						);
-						saveState(state, ctx.cwd);
-						return state;
+						const escalation = await escalate(task, `Critical findings from ${reviewName}`, ui);
+						if (escalation === "abort") {
+							state.error = "Aborted by user";
+							saveState(state, ctx.cwd);
+							return state;
+						}
+						if (escalation === "skip") {
+							task.status = "skipped";
+							break;
+						}
 					}
 				}
-				// inconclusive optional reviews are ignored
+			}
+			if (task.status === "skipped") {
+				saveState(state, ctx.cwd);
+				continue;
 			}
 		}
 
@@ -163,29 +203,51 @@ export async function runExecutePhase(
 		state.currentTaskIndex = i + 1;
 		saveState(state, ctx.cwd);
 
+		// Update progress widget
+		ui?.setWidget?.("workflow-progress", formatTaskProgress(state.tasks, i + 1));
+
 		// h. EXECUTION MODE CHECK
 		batchCounter++;
 		const execMode = state.config.executionMode || "auto";
 
 		if (execMode === "checkpoint") {
-			saveState(state, ctx.cwd);
 			return state;
 		}
 
 		if (execMode === "batch") {
 			const batchSize = state.config.batchSize || 3;
 			if (batchCounter >= batchSize) {
-				saveState(state, ctx.cwd);
 				return state;
 			}
 		}
-		// auto: continue
 	}
 
 	// 5. All tasks done
 	state.phase = "finalize";
 	saveState(state, ctx.cwd);
 	return state;
+}
+
+// --- Escalation via ctx.ui.select ---
+
+async function escalate(
+	task: TaskExecState,
+	reason: string,
+	ui: any,
+): Promise<"retry" | "skip" | "abort"> {
+	if (!ui?.select) {
+		// No UI — default to skip
+		return "skip";
+	}
+
+	const choice = await ui.select(
+		`Task "${task.title}" needs attention: ${reason}`,
+		["Retry", "Skip", "Abort"],
+	);
+
+	if (choice === "Abort") return "abort";
+	if (choice === "Skip") return "skip";
+	return "retry";
 }
 
 // --- Review loop helper ---
@@ -200,10 +262,11 @@ async function runReviewLoop(
 	maxRetries: number,
 	ctx: { cwd: string },
 	signal: AbortSignal | undefined,
+	ui: any,
+	makeOnStreamEvent: () => OnStreamEvent,
 	buildPrompt: (task: TaskExecState, changedFiles: string[]) => string,
 ): Promise<"passed" | "escalated"> {
 	if (!reviewer) {
-		// No reviewer available — skip with warning
 		task.reviewsPassed.push(reviewType);
 		return "passed";
 	}
@@ -214,7 +277,9 @@ async function runReviewLoop(
 	let currentChangedFiles = changedFiles;
 
 	for (let attempt = 0; attempt < maxRetries; attempt++) {
-		const reviewResult = await dispatchAgent(reviewer, buildPrompt(task, currentChangedFiles), ctx.cwd, signal);
+		const reviewResult = await dispatchAgent(
+			reviewer, buildPrompt(task, currentChangedFiles), ctx.cwd, signal, undefined, makeOnStreamEvent(),
+		);
 		state.totalCostUsd += reviewResult.usage.cost;
 
 		const output = getFinalOutput(reviewResult.messages);
@@ -226,12 +291,18 @@ async function runReviewLoop(
 		}
 
 		if (parsed.status === "inconclusive") {
-			state.pendingInteraction = confirmTaskEscalation(
-				task.title,
-				`${reviewType} review was inconclusive: ${parsed.parseError}`,
-			);
-			saveState(state, ctx.cwd);
-			return "escalated";
+			const escalation = await escalate(task, `${reviewType} review was inconclusive: ${parsed.parseError}`, ui);
+			if (escalation === "abort") {
+				state.error = "Aborted by user";
+				saveState(state, ctx.cwd);
+				return "escalated";
+			}
+			if (escalation === "skip") {
+				task.status = "skipped";
+				saveState(state, ctx.cwd);
+				return "escalated";
+			}
+			continue;
 		}
 
 		// status === "fail"
@@ -243,8 +314,7 @@ async function runReviewLoop(
 			const fixResult = await dispatchAgent(
 				implementer,
 				buildFixPrompt(task, reviewType, parsed.findings, currentChangedFiles),
-				ctx.cwd,
-				signal,
+				ctx.cwd, signal, undefined, makeOnStreamEvent(),
 			);
 			state.totalCostUsd += fixResult.usage.cost;
 
@@ -252,16 +322,19 @@ async function runReviewLoop(
 			task.status = "reviewing";
 			saveState(state, ctx.cwd);
 		} else {
-			// Max retries exceeded
-			state.pendingInteraction = confirmTaskEscalation(
-				task.title,
-				`${reviewType} review failed after ${maxRetries} attempts`,
-			);
-			saveState(state, ctx.cwd);
-			return "escalated";
+			const escalation = await escalate(task, `${reviewType} review failed after ${maxRetries} attempts`, ui);
+			if (escalation === "abort") {
+				state.error = "Aborted by user";
+				saveState(state, ctx.cwd);
+				return "escalated";
+			}
+			if (escalation === "skip") {
+				task.status = "skipped";
+				saveState(state, ctx.cwd);
+				return "escalated";
+			}
 		}
 	}
 
-	// Shouldn't reach here, but handle gracefully
 	return "passed";
 }
