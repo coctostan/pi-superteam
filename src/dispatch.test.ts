@@ -222,3 +222,26 @@ function writeAgentFileAt(dir: string, name: string, frontmatter: Record<string,
 	const content = `---\n${fm}\n---\n${body}`;
 	fs.writeFileSync(path.join(dir, `${name}.md`), content);
 }
+
+describe("new agent profiles", () => {
+  it("brainstormer agent exists with read-only tools", () => {
+    const { agents } = discoverAgents(process.cwd(), false);
+    const brainstormer = agents.find(a => a.name === "brainstormer");
+    expect(brainstormer).toBeDefined();
+    expect(brainstormer!.tools).toEqual(expect.arrayContaining(["read", "find", "grep", "ls"]));
+    expect(brainstormer!.tools).not.toContain("write");
+    expect(brainstormer!.tools).not.toContain("edit");
+    expect(brainstormer!.tools).not.toContain("bash");
+    expect(brainstormer!.systemPrompt).toContain("superteam-brainstorm");
+  });
+
+  it("planner agent exists with write but no bash/edit", () => {
+    const { agents } = discoverAgents(process.cwd(), false);
+    const planner = agents.find(a => a.name === "planner");
+    expect(planner).toBeDefined();
+    expect(planner!.tools).toEqual(expect.arrayContaining(["read", "write", "find", "grep", "ls"]));
+    expect(planner!.tools).not.toContain("bash");
+    expect(planner!.tools).not.toContain("edit");
+    expect(planner!.systemPrompt).toContain("superteam-tasks");
+  });
+});
