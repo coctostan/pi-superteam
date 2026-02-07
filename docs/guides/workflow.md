@@ -114,3 +114,18 @@ State is saved to `.superteam-workflow.json` after every phase:
 - **Agent failures**: Non-zero exit codes trigger escalation (Retry/Skip/Abort)
 - **Cost limits**: Hard budget stops execution automatically
 - **User cancellation**: Escape/undefined responses save state without advancing — resume anytime
+
+## Parsing Robustness (v0.2.1)
+
+The workflow relies on agents producing structured output in fenced code blocks. Two parsers have been hardened against real-world LLM output:
+
+### Task Parser (`superteam-tasks`)
+- Uses a **line-walking extractor** instead of regex — immune to inner triple-backtick sequences
+- Closing fence must be at 0-3 spaces indent; embedded code fences in `description: |` block scalars are indented 4+ and don't match
+- Supports YAML-like `description: |` block scalars with automatic dedenting
+
+### Brainstorm Parser (`superteam-brainstorm`)
+- **Quote-aware fenced extractor** — tracks `inString`/`escape` state while scanning lines, only accepts closing fence when not inside a JSON string
+- **Newline sanitization** — `sanitizeJsonNewlines()` replaces literal `\n` (0x0a) inside JSON strings with `\\n` before `JSON.parse()`
+- **3-tier fallback chain**: fenced block → brace-match on fenced content → brace-match on full output (with fenced block stripped)
+- **Prompt hardening** — all brainstorm prompts include explicit "use `\\n` escapes, not literal newlines" instructions

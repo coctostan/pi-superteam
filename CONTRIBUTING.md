@@ -49,22 +49,26 @@ src/
 ├── rules/
 │   └── engine.ts             ← Context-aware rule injection (TTSR-like)
 └── workflow/
-    ├── state.ts              ← SDD plan tracking + persistence
+    ├── state.ts              ← SDD plan tracking + persistence (line-walker parser)
     ├── tdd-guard.ts          ← TDD enforcement (tool call interception)
     ├── sdd.ts                ← SDD orchestration loop
+    ├── brainstorm-parser.ts  ← Quote-aware JSON extraction with fallback chain
     ├── orchestrator.ts       ← Workflow orchestrator entry point + phase dispatch loop
     ├── orchestrator-state.ts ← OrchestratorState type, saveState/loadState/clearState
     ├── prompt-builder.ts     ← Deterministic prompt construction for all agents
     ├── interaction.ts        ← PendingInteraction type, user response parsing
+    ├── ui.ts                 ← Status bar formatting + activity buffer
+    ├── progress.ts           ← Progress file rendering + persistence
     ├── git-utils.ts          ← Async git utilities (getTrackedFiles, computeChangedFiles, getCurrentSha)
     └── phases/
-        ├── plan.ts           ← Plan draft phase (scout + planner dispatch)
+        ├── brainstorm.ts     ← Brainstorm phase (scout → questions → approaches → design)
+        ├── plan-write.ts     ← Plan write phase (planner agent dispatch)
         ├── plan-review.ts    ← Plan review phase (architect + spec reviewer)
         ├── configure.ts      ← Configure phase (review mode, exec mode, batch size)
         ├── execute.ts        ← Execute phase (implement → review → fix loops)
         └── finalize.ts       ← Finalize phase (cross-task review + report)
 
-agents/   ← Agent profiles (7 built-in, markdown with YAML frontmatter)
+agents/   ← Agent profiles (9 built-in, markdown with YAML frontmatter)
 skills/   ← Methodology skills (5: TDD, ATDD, SDD, writing-plans, brainstorming)
 rules/    ← Context rules (3: test-first, yagni, no-impl-before-spec)
 prompts/  ← Prompt templates (4: /sdd, /review-parallel, /scout, /implement)
@@ -113,10 +117,24 @@ docs/     ← Guides and reference documentation
 4. Wire it into the phase dispatch switch in `orchestrator.ts`
 5. Add prompts to `prompt-builder.ts` if the phase dispatches agents
 
+## Running Tests
+
+```bash
+# Full suite (282 tests)
+npx vitest run --reporter=verbose
+
+# Specific file
+npx vitest run src/workflow/state.acceptance.test.ts --reporter=verbose
+
+# Watch mode
+npx vitest
+```
+
 ## Pull Requests
 
 - Keep changes focused — one feature or fix per PR
-- Test manually via pi (automated tests coming)
+- Run `npx vitest run` and ensure all tests pass
+- Add acceptance tests for bug fixes (prove the bug exists, then fix it)
 - Update relevant docs if behavior changes
 - Follow existing code style
 - Update CHANGELOG.md with your changes

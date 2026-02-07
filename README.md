@@ -251,6 +251,8 @@ Session-level budget with mid-stream enforcement:
 | Agent | Purpose | Tools | Default Model |
 |-------|---------|-------|---------------|
 | 🔍 `scout` | Fast codebase recon | read, grep, find, ls, bash | haiku |
+| 💡 `brainstormer` | Questions, approaches, design sections | read, find, grep, ls | sonnet |
+| 📝 `planner` | Write detailed TDD implementation plans | read, write, find, grep, ls | sonnet |
 | 🔨 `implementer` | TDD implementation | all (+ TDD guard + TDD skill) | sonnet |
 | 📋 `spec-reviewer` | Spec compliance check | read, grep, find, ls | sonnet |
 | ✨ `quality-reviewer` | Code + test quality | read, grep, find, ls | sonnet |
@@ -369,23 +371,29 @@ pi-superteam/
 │   ├── review-parser.ts              Structured JSON extraction from reviewer output
 │   ├── rules/engine.ts               Context-aware rule injection (TTSR)
 │   └── workflow/
-│       ├── state.ts                  SDD plan tracking + persistence
+│       ├── state.ts                  SDD plan tracking + persistence (line-walker parser)
 │       ├── tdd-guard.ts              TDD enforcement (tool call interception)
 │       ├── sdd.ts                    SDD orchestration loop
+│       ├── brainstorm-parser.ts      Quote-aware JSON extraction with fallback chain
 │       ├── orchestrator.ts           Workflow orchestrator entry point + phase dispatch
 │       ├── orchestrator-state.ts     Typed state, persistence, phase transitions
 │       ├── prompt-builder.ts         Deterministic prompt construction for all agents
 │       ├── interaction.ts            Structured user interaction helpers
+│       ├── ui.ts                     Status bar formatting + activity buffer
+│       ├── progress.ts              Progress file rendering + persistence
 │       ├── git-utils.ts              Async git utilities (tracked files, changed files, SHA)
 │       └── phases/
-│           ├── plan.ts               Plan draft phase (scout + planner)
+│           ├── brainstorm.ts         Brainstorm phase (scout → questions → approaches → design)
+│           ├── plan-write.ts         Plan write phase (planner agent dispatch)
 │           ├── plan-review.ts        Plan review phase (architect + spec reviewer)
 │           ├── configure.ts          Configure phase (review mode, exec mode, batch size)
 │           ├── execute.ts            Execute phase (implement → review → fix loops)
 │           └── finalize.ts           Finalize phase (cross-task review + report)
 │
-├── agents/                           Agent profiles (7 built-in)
+├── agents/                           Agent profiles (9 built-in)
 │   ├── scout.md
+│   ├── brainstormer.md
+│   ├── planner.md
 │   ├── implementer.md
 │   ├── spec-reviewer.md
 │   ├── quality-reviewer.md

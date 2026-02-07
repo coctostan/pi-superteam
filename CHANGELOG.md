@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.1 (2026-02-07)
+
+### Bug Fixes
+
+- **🔴 CRITICAL: Task parser no longer drops tasks** — `parseTaskBlock()` rewritten from regex to line-walking extractor. The old non-greedy regex (`/[\s\S]*?```/`) stopped at the first triple-backtick inside a task description, silently dropping all subsequent tasks. Plans with embedded code fences in `description: |` block scalars now parse correctly. ([state.ts](src/workflow/state.ts))
+
+- **🟡 Brainstorm JSON parsing hardened against literal newlines** — `extractFencedBlock()` replaced with a quote-aware line-walker that tracks `inString`/`escape` state, so inner triple-backtick sequences inside JSON strings don't truncate extraction. New `sanitizeJsonNewlines()` replaces literal `\n` (0x0a) inside JSON strings with `\\n` before `JSON.parse()`. Full fallback chain: fenced → brace-on-fenced → brace-on-full output. ([brainstorm-parser.ts](src/workflow/brainstorm-parser.ts))
+
+- **🟡 Status bar now updates per brainstorm sub-step** — `ui.setStatus()` is called with `formatStatus(state)` at the entry of each sub-step (scout, questions, approaches, design) instead of showing "scouting..." for the entire phase. ([brainstorm.ts](src/workflow/phases/brainstorm.ts))
+
+- **🟢 Confirm dialogs no longer show "undefined"** — Design section approval calls now pass two arguments `(title, message)` with `|| "(untitled)"` / `|| "(no content)"` fallbacks instead of a single concatenated string. ([brainstorm.ts](src/workflow/phases/brainstorm.ts))
+
+### Improvements
+
+- **`description: |` block scalar support** in `parseYamlLikeTasks()` — YAML-like task blocks now support multi-line descriptions with the pipe syntax, including automatic dedenting and embedded code fences. ([state.ts](src/workflow/state.ts))
+
+- **Brainstorm prompt hardening** — All brainstorm prompts (`buildBrainstormQuestionsPrompt`, `buildBrainstormApproachesPrompt`, `buildBrainstormDesignPrompt`, `buildBrainstormSectionRevisionPrompt`) and the brainstormer agent profile now include explicit instructions to use `\n` escape sequences instead of literal newlines in JSON strings. ([prompt-builder.ts](src/workflow/prompt-builder.ts), [brainstormer.md](agents/brainstormer.md))
+
+### Tests
+
+- 32 new tests (250 → 282 total) across 4 new test files:
+  - `state.acceptance.test.ts` — 11 tests for task parser with real smoke-test fixture
+  - `brainstorm-parser.acceptance.test.ts` — 5 tests for JSON parsing edge cases
+  - `brainstorm.acceptance.test.ts` — 3 tests for status bar + confirm dialog
+  - `plan-write.acceptance.test.ts` — 1 integration test for end-to-end plan parsing
+- Test fixture vendored at `src/workflow/__fixtures__/smoke-test-plan.md`
+
 ## 0.2.0 (2026-02-07)
 
 ### Features
