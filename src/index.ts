@@ -51,6 +51,8 @@ import {
 	restoreTddState,
 	serializeTddState,
 } from "./workflow/tdd-guard.js";
+import { runOrchestrator } from "./workflow/orchestrator.js";
+import { loadState as loadWorkflowState, clearState as clearWorkflowState } from "./workflow/orchestrator-state.js";
 
 export default function superteam(pi: ExtensionAPI) {
 	// --- team tool ---
@@ -639,6 +641,81 @@ export default function superteam(pi: ExtensionAPI) {
 				default:
 					ctx.ui.notify("Unknown subcommand. Usage: /sdd load|run|status|next|reset", "warning");
 			}
+		},
+	});
+
+	// --- /workflow command ---
+
+	pi.registerCommand("workflow", {
+		description: "Orchestrated workflow. /workflow <description> to start, /workflow to resume, /workflow status, /workflow abort",
+		async handler(args, ctx) {
+			const trimmed = args.trim();
+			if (trimmed === "status") {
+				const state = loadWorkflowState(ctx.cwd);
+				if (!state) {
+					ctx.ui.notify("No active workflow.", "info");
+					return;
+				}
+				const tasksDone = state.tasks.filter((t) => t.status === "complete").length;
+				ctx.ui.notify(
+					`Phase: ${state.phase} | Tasks: ${tasksDone}/${state.tasks.length} | Cost: $${state.totalCostUsd.toFixed(2)}`,
+					"info",
+				);
+				return;
+			}
+			if (trimmed === "abort") {
+				clearWorkflowState(ctx.cwd);
+				ctx.ui.notify("Workflow aborted and state cleared.", "info");
+				return;
+			}
+			// Start new or resume — the tool handler invokes runOrchestrator
+			ctx.ui.notify(
+				"Use the workflow tool to run the orchestrator (e.g. ask the agent to start/resume the workflow).",
+				"info",
+			);
+		},
+	});
+
+	// --- workflow tool ---
+
+	pi.registerTool({
+		name: "workflow",
+		label: "Workflow",
+		description: [
+			"Run the orchestrated workflow engine.",
+			"Provide a description to start a new workflow, or call without input to resume.",
+			"The workflow goes through plan → review → configure → execute → finalize phases automatically.",
+		].join(" "),
+		parameters: Type.Object({
+			input: Type.Optional(
+				Type.String({ description: "Description to start a new workflow, or answer to resume a pending question" }),
+			),
+		}),
+
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			const result = await runOrchestrator(ctx, signal, params.input);
+			return {
+				content: [{ type: "text", text: result.message }],
+				isError: result.status === "error",
+			};
+		},
+
+		renderCall(args, theme) {
+			const preview = args.input
+				? (args.input.length > 60 ? `${args.input.slice(0, 60)}...` : args.input)
+				: "(resume)";
+			return new Text(
+				`${theme.fg("toolTitle", theme.bold("workflow "))}${theme.fg("dim", preview)}`,
+				0,
+				0,
+			);
+		},
+
+		renderResult(result, _opts, theme) {
+			const text = result.content[0];
+			const content = text?.type === "text" ? text.text : "(no output)";
+			const color = result.isError ? "error" : "toolOutput";
+			return new Text(theme.fg(color, content), 0, 0);
 		},
 	});
 
