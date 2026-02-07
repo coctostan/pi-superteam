@@ -1,60 +1,61 @@
+/**
+ * Configure phase — direct ctx.ui dialogs for execution and review settings.
+ */
+
 import type { OrchestratorState } from "../orchestrator-state.js";
-import { saveState } from "../orchestrator-state.js";
-import { askExecutionMode, askBatchSize, askReviewMode, parseUserResponse } from "../interaction.js";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+
+type Ctx = ExtensionContext | { cwd: string; hasUI?: boolean; ui?: any };
 
 export async function runConfigurePhase(
-  state: OrchestratorState,
-  ctx: { cwd: string },
-  userInput?: string,
+	state: OrchestratorState,
+	ctx: Ctx,
 ): Promise<OrchestratorState> {
-  // a. Process pending interaction response
-  if (state.pendingInteraction && userInput !== undefined) {
-    const response = parseUserResponse(state.pendingInteraction, userInput);
-    const id = state.pendingInteraction.id;
+	const ui = (ctx as any).ui;
 
-    if (id === "review-mode") {
-      state.config.reviewMode = response as OrchestratorState["config"]["reviewMode"];
-    } else if (id === "execution-mode") {
-      state.config.executionMode = response as OrchestratorState["config"]["executionMode"];
-    } else if (id === "batch-size") {
-      const parsed = parseInt(response, 10);
-      state.config.batchSize = Math.max(1, isNaN(parsed) ? 3 : parsed);
-    }
+	// 1. Execution mode
+	const execModeLabel = await ui?.select?.("Execution Mode", ["Auto", "Checkpoint", "Batch"]);
+	if (execModeLabel === undefined) {
+		// User cancelled
+		return state;
+	}
 
-    state.pendingInteraction = undefined;
-  }
+	const execModeMap: Record<string, "auto" | "checkpoint" | "batch"> = {
+		"Auto": "auto",
+		"Checkpoint": "checkpoint",
+		"Batch": "batch",
+	};
+	state.config.executionMode = execModeMap[execModeLabel] || "auto";
 
-  // b. Determine next question needed
-  if (!state.config.reviewMode) {
-    state.pendingInteraction = askReviewMode();
-    saveState(state, ctx.cwd);
-    return state;
-  }
+	// 2. Batch size (if batch mode)
+	if (state.config.executionMode === "batch") {
+		const batchInput = await ui?.input?.("Batch Size", "3");
+		if (batchInput === undefined) {
+			return state;
+		}
+		const parsed = parseInt(batchInput, 10);
+		state.config.batchSize = Math.max(1, isNaN(parsed) || batchInput === "" ? 3 : parsed);
+	} else {
+		state.config.batchSize = state.config.batchSize || 3;
+	}
 
-  if (!state.config.executionMode) {
-    state.pendingInteraction = askExecutionMode();
-    saveState(state, ctx.cwd);
-    return state;
-  }
+	// 3. Review mode
+	const reviewModeLabel = await ui?.select?.("Review Mode", ["Iterative", "Single-pass"]);
+	if (reviewModeLabel === undefined) {
+		return state;
+	}
 
-  if (state.config.executionMode === "batch" && !state.config.batchSize) {
-    state.pendingInteraction = askBatchSize();
-    saveState(state, ctx.cwd);
-    return state;
-  }
+	const reviewModeMap: Record<string, "iterative" | "single-pass"> = {
+		"Iterative": "iterative",
+		"Single-pass": "single-pass",
+	};
+	state.config.reviewMode = reviewModeMap[reviewModeLabel] || "iterative";
 
-  // c. All config collected — set defaults and advance
-  if (!state.config.batchSize) {
-    state.config.batchSize = 3;
-  }
-  if (!state.config.maxPlanReviewCycles) {
-    state.config.maxPlanReviewCycles = 3;
-  }
-  if (!state.config.maxTaskReviewCycles) {
-    state.config.maxTaskReviewCycles = 3;
-  }
+	// Set defaults
+	if (!state.config.maxPlanReviewCycles) state.config.maxPlanReviewCycles = 3;
+	if (!state.config.maxTaskReviewCycles) state.config.maxTaskReviewCycles = 3;
 
-  state.phase = "execute";
-  saveState(state, ctx.cwd);
-  return state;
+	// Advance
+	state.phase = "execute";
+	return state;
 }
