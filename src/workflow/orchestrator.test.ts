@@ -6,8 +6,8 @@ import type { OrchestratorState, PendingInteraction } from "./orchestrator-state
 import { createInitialState, saveState, loadState, clearState } from "./orchestrator-state.ts";
 
 // Mock all phase modules
-vi.mock("./phases/plan.js", () => ({
-	runPlanDraftPhase: vi.fn(),
+vi.mock("./phases/plan-write.js", () => ({
+	runPlanWritePhase: vi.fn(),
 }));
 vi.mock("./phases/plan-review.js", () => ({
 	runPlanReviewPhase: vi.fn(),
@@ -23,7 +23,7 @@ vi.mock("./phases/finalize.js", () => ({
 }));
 
 import { runOrchestrator, type OrchestratorResult } from "./orchestrator.ts";
-import { runPlanDraftPhase } from "./phases/plan.ts";
+import { runPlanWritePhase } from "./phases/plan-write.ts";
 import { runPlanReviewPhase } from "./phases/plan-review.ts";
 import { runConfigurePhase } from "./phases/configure.ts";
 import { runExecutePhase } from "./phases/execute.ts";
@@ -52,8 +52,8 @@ describe("runOrchestrator", () => {
 	it("creates initial state when no state and userInput provided", async () => {
 		// Plan draft phase transitions to plan-review so the loop continues,
 		// then plan-review sets a pendingInteraction so it stops.
-		const mockPlanDraft = vi.mocked(runPlanDraftPhase);
-		mockPlanDraft.mockImplementation(async (state) => ({
+		const mockPlanWrite = vi.mocked(runPlanWritePhase);
+		mockPlanWrite.mockImplementation(async (state) => ({
 			...state,
 			phase: "plan-review" as const,
 		}));
@@ -71,7 +71,7 @@ describe("runOrchestrator", () => {
 
 		const result = await runOrchestrator(ctx, undefined, "Build a CLI tool");
 		expect(result.status).toBe("waiting");
-		expect(mockPlanDraft).toHaveBeenCalled();
+		expect(mockPlanWrite).toHaveBeenCalled();
 		// State should be persisted
 		const saved = loadState(tmpDir);
 		expect(saved).not.toBeNull();
@@ -136,8 +136,8 @@ describe("runOrchestrator", () => {
 	});
 
 	it("returns error when phase has error", async () => {
-		const mockPlanDraft = vi.mocked(runPlanDraftPhase);
-		mockPlanDraft.mockImplementation(async (state) => ({
+		const mockPlanWrite = vi.mocked(runPlanWritePhase);
+		mockPlanWrite.mockImplementation(async (state) => ({
 			...state,
 			error: "Scout agent failed",
 		}));
@@ -148,8 +148,8 @@ describe("runOrchestrator", () => {
 	});
 
 	it("chains through phases when phase changes", async () => {
-		const mockPlanDraft = vi.mocked(runPlanDraftPhase);
-		mockPlanDraft.mockImplementation(async (state) => ({
+		const mockPlanWrite = vi.mocked(runPlanWritePhase);
+		mockPlanWrite.mockImplementation(async (state) => ({
 			...state,
 			phase: "plan-review" as const,
 		}));
@@ -173,7 +173,7 @@ describe("runOrchestrator", () => {
 
 		const result = await runOrchestrator(ctx, undefined, "Build it");
 		expect(result.status).toBe("waiting");
-		expect(mockPlanDraft).toHaveBeenCalledTimes(1);
+		expect(mockPlanWrite).toHaveBeenCalledTimes(1);
 		expect(mockPlanReview).toHaveBeenCalledTimes(1);
 		expect(mockConfigure).toHaveBeenCalledTimes(1);
 	});
@@ -226,8 +226,8 @@ describe("runOrchestrator", () => {
 	});
 
 	it("saves state after each phase transition", async () => {
-		const mockPlanDraft = vi.mocked(runPlanDraftPhase);
-		mockPlanDraft.mockImplementation(async (state) => ({
+		const mockPlanWrite = vi.mocked(runPlanWritePhase);
+		mockPlanWrite.mockImplementation(async (state) => ({
 			...state,
 			phase: "plan-review" as const,
 			pendingInteraction: {

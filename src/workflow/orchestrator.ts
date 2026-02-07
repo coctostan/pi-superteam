@@ -8,7 +8,7 @@ import {
 	clearState,
 } from "./orchestrator-state.js";
 import { formatInteractionForAgent, parseUserResponse } from "./interaction.js";
-import { runPlanDraftPhase } from "./phases/plan.js";
+import { runPlanWritePhase } from "./phases/plan-write.js";
 import { runPlanReviewPhase } from "./phases/plan-review.js";
 import { runConfigurePhase } from "./phases/configure.js";
 import { runExecutePhase } from "./phases/execute.js";
@@ -81,7 +81,7 @@ export async function runOrchestrator(
 				state!.phase = "plan-draft";
 				break;
 			case "plan-draft":
-				state = await runPlanDraftPhase(state!, ctx as ExtensionContext, signal);
+				state = await runPlanWritePhase(state!, ctx as ExtensionContext, signal);
 				break;
 			case "plan-review":
 				state = await runPlanReviewPhase(state!, ctx as ExtensionContext, signal);
