@@ -17,6 +17,7 @@ import {
 	buildBrainstormDesignPrompt,
 	buildBrainstormSectionRevisionPrompt,
 } from "../prompt-builder.js";
+import { formatStatus } from "../ui.js";
 
 type Ctx = ExtensionContext | { cwd: string; hasUI?: boolean; ui?: any };
 
@@ -39,7 +40,7 @@ export async function runBrainstormPhase(
 
 	// Sub-step: scout
 	if (state.brainstorm.step === "scout") {
-		ui?.setStatus?.("workflow", "⚡ Workflow: brainstorm (scouting...)");
+		ui?.setStatus?.("workflow", formatStatus(state));
 		const result = await dispatchAgent(scoutAgent, buildScoutPrompt(ctx.cwd), ctx.cwd, signal);
 		state.totalCostUsd += result.usage.cost;
 		state.brainstorm.scoutOutput = getFinalOutput(result.messages);
@@ -48,6 +49,7 @@ export async function runBrainstormPhase(
 
 	// Sub-step: questions
 	if (state.brainstorm.step === "questions") {
+		ui?.setStatus?.("workflow", formatStatus(state));
 		const scoutOutput = state.brainstorm.scoutOutput || "";
 
 		// Dispatch brainstormer for questions
@@ -90,6 +92,7 @@ export async function runBrainstormPhase(
 
 	// Sub-step: approaches
 	if (state.brainstorm.step === "approaches") {
+		ui?.setStatus?.("workflow", formatStatus(state));
 		const scoutOutput = state.brainstorm.scoutOutput || "";
 		const qa = state.brainstorm.questions || [];
 
@@ -124,6 +127,7 @@ export async function runBrainstormPhase(
 
 	// Sub-step: design
 	if (state.brainstorm.step === "design") {
+		ui?.setStatus?.("workflow", formatStatus(state));
 		const scoutOutput = state.brainstorm.scoutOutput || "";
 		const qa = state.brainstorm.questions || [];
 		const approaches = state.brainstorm.approaches || [];
@@ -153,7 +157,9 @@ export async function runBrainstormPhase(
 		// Present each section for approval
 		for (let i = 0; i < sections.length; i++) {
 			const section = sections[i];
-			const approved = await ui?.confirm?.(`## ${section.title}\n\n${section.content}`);
+			const title = section.title || "(untitled)";
+			const message = section.content || "(no content)";
+			const approved = await ui?.confirm?.(title, message);
 
 			if (approved === undefined) {
 				return state; // cancelled
@@ -176,7 +182,9 @@ export async function runBrainstormPhase(
 				}
 
 				// Re-confirm revised section
-				const revisedApproved = await ui?.confirm?.(`## ${sections[i].title}\n\n${sections[i].content}`);
+				const revisedTitle = sections[i].title || "(untitled)";
+				const revisedMessage = sections[i].content || "(no content)";
+				const revisedApproved = await ui?.confirm?.(revisedTitle, revisedMessage);
 				if (!revisedApproved) {
 					// Accept anyway — we move forward after one revision
 				}
