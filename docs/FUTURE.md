@@ -4,6 +4,44 @@ Living document tracking potential features, known weaknesses, use cases to expl
 
 ---
 
+## Bugs Found in Smoke Test (2026-02-07)
+
+### 🔴 CRITICAL: superteam-tasks YAML parser drops tasks
+The plan file had 3 tasks in its `superteam-tasks` block, but the parser only extracted 2. Task 3 ("Add the /health route — TDD green") was silently dropped. The workflow completed thinking it was done, but the actual feature was never implemented — tests left in RED state with no GREEN step.
+
+**Impact:** Workflows can silently skip work. The user sees "2/2 complete" and thinks everything is done, but the feature is missing.
+
+**Root cause:** Likely a YAML parsing issue with multi-line `description` fields. Task 3's description contained a code block inside YAML, which may have confused the parser. Need to investigate the plan-write phase's task extraction logic and the underlying YAML parsing.
+
+**Fix approach:** Debug the parser with the actual plan file from the smoke test (`test-workflow-smoke/docs/plans/*-plan.md`). Harden the YAML parser to handle multi-line descriptions, embedded code blocks, and edge cases. Add test cases for these patterns.
+
+### 🟡 HIGH: Brainstorm JSON parse failures (60% failure rate)
+3 out of 5 brainstormer dispatches produced invalid JSON (unterminated strings). The retry mechanism handled it gracefully — retry twice, then escalate to user with Retry/Abort. But 60% failure rate is expensive ($0.58 in wasted dispatches) and slow (adds ~5 min of retries).
+
+**Root cause:** The brainstormer agent produces JSON with literal newlines inside string values. The `JSON.parse()` call fails because JSON strings can't contain unescaped newlines.
+
+**Fix approach (pick one or combine):**
+1. **Pre-process:** Before parsing, replace literal newlines inside JSON strings with `\n` escape sequences
+2. **Harden prompt:** Add explicit "IMPORTANT: JSON strings must not contain literal newlines — use \\n instead" to brainstormer system prompt
+3. **Use relaxed parser:** Try `JSON5.parse()` or a custom parser that handles unescaped newlines
+4. **Reduce JSON complexity:** Shorten the design section content that goes into JSON strings (the long paragraphs are what cause the newline issue)
+
+### 🟡 MEDIUM: Status bar sub-step label stuck on "scouting"
+During the brainstorm phase, the footer status showed `⚡ Workflow: brainstorm (scouting...)` even during the questions, approaches, and design sub-steps. Should update to show the current sub-step name.
+
+**Root cause:** The `formatStatus()` function in `ui.ts` likely reads `state.brainstorm.step` but the step value isn't being updated in state before the status bar refresh, or the status bar text is hardcoded.
+
+**Fix:** Verify `state.brainstorm.step` is updated before each `ctx.ui.setStatus()` call in the brainstorm phase.
+
+### 🟢 LOW: `undefined` displayed in design section content
+When presenting design sections for approval, the word "undefined" appears at the end of the section content. Minor cosmetic issue.
+
+**Root cause:** Likely a `section.title` or trailing field being `undefined` and concatenated into the display string.
+
+**Fix:** Add null checks in the section presentation code.
+
+---
+
 ## Immediate (post-redesign)
 
 ### One task per agent dispatch — lightweight context always wins
