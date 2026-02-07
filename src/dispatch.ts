@@ -72,6 +72,20 @@ export interface DispatchDetails {
 
 export type OnUpdateCallback = (partial: AgentToolResult<DispatchDetails>) => void;
 
+// --- Stream event types ---
+
+export type StreamEvent = {
+	type: string;
+	toolCallId?: string;
+	toolName?: string;
+	args?: Record<string, any>;
+	partialResult?: any;
+	result?: any;
+	isError?: boolean;
+};
+
+export type OnStreamEvent = (event: StreamEvent) => void;
+
 // --- Cost tracking ---
 
 /** Session-level cumulative cost tracker */
@@ -297,6 +311,7 @@ async function runAgent(
 	step: number | undefined,
 	signal: AbortSignal | undefined,
 	onResultUpdate: (result: DispatchResult) => void,
+	onStreamEvent?: OnStreamEvent,
 ): Promise<DispatchResult> {
 	const args = buildSubprocessArgs(agent, cwd);
 
@@ -337,6 +352,23 @@ async function runAgent(
 				if (!line.trim()) return;
 				let event: any;
 				try { event = JSON.parse(line); } catch { return; }
+
+				// Fire stream events for tool execution lifecycle
+				if (onStreamEvent && (
+					event.type === "tool_execution_start" ||
+					event.type === "tool_execution_update" ||
+					event.type === "tool_execution_end"
+				)) {
+					onStreamEvent({
+						type: event.type,
+						toolCallId: event.toolCallId,
+						toolName: event.toolName,
+						args: event.args,
+						partialResult: event.partialResult,
+						result: event.result,
+						isError: event.isError,
+					});
+				}
 
 				if (event.type === "message_end" && event.message) {
 					const msg = event.message as Message;
@@ -429,6 +461,7 @@ export async function dispatchAgent(
 	cwd: string,
 	signal?: AbortSignal,
 	onUpdate?: OnUpdateCallback,
+	onStreamEvent?: OnStreamEvent,
 ): Promise<DispatchResult> {
 	return runAgent(agent, task, cwd, undefined, signal, (r) => {
 		if (onUpdate) {
@@ -437,7 +470,7 @@ export async function dispatchAgent(
 				details: { mode: "single", results: [r] },
 			});
 		}
-	});
+	}, onStreamEvent);
 }
 
 /**
