@@ -1,43 +1,28 @@
-# pi-superteam
+<p align="center">
+  <h1 align="center">🦸 pi-superteam</h1>
+  <p align="center">
+    Multi-agent orchestration · TDD enforcement · Iterative review cycles · Context-aware rules
+    <br/>
+    <em>A <a href="https://github.com/badlogic/pi">pi</a> extension package that makes your AI write better code.</em>
+  </p>
+</p>
 
-A [pi](https://github.com/badlogic/pi) extension package that combines multi-agent orchestration, TDD/ATDD enforcement, iterative review cycles, and context-aware rules into a unified development workflow.
+<p align="center">
+  <a href="#installation">Install</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#agents">Agents</a> ·
+  <a href="#configuration">Config</a> ·
+  <a href="docs/guides/">Docs</a>
+</p>
 
-## Features
+---
 
-### 🤖 Multi-Agent Dispatch
-Dispatch specialized agents with isolated context windows:
-- **Single mode** — one agent, one task
-- **Parallel mode** — multiple agents simultaneously (up to 8, 4 concurrent)
-- **Chain mode** — sequential agents with `{previous}` context passing
+## What is this?
 
-### 🧪 TDD/ATDD Guard
-Hard enforcement of test-driven development via `tool_call` interception:
-- Blocks writes to implementation files without a test file
-- Blocks writes without tests having been run
-- Bash heuristic catches shell-based file mutations
-- ATDD mode warns when unit tests lack an acceptance test
-- Three-layer defense: guard (mechanical) + rules (proactive) + skills (teaching)
+**pi-superteam** turns your pi agent into a development team. Instead of one AI doing everything, you get specialized agents — a scout that explores code, an implementer that writes tests first, reviewers that catch bugs — all coordinated automatically.
 
-### 🔄 SDD Orchestration
-Subagent-Driven Development — automated implement → review → fix loops:
-- Dispatches implementer agent per task (with TDD enforcement)
-- Required reviews: spec compliance, code quality
-- Optional reviews: security, performance (in parallel)
-- Fix loops with structured findings passed back to implementer
-- Escalation to human on max iterations or inconclusive output
-
-### 📏 Context-Aware Rules
-TTSR-like rule injection when anti-patterns detected:
-- Scans recent assistant output for trigger patterns
-- Injects corrective guidance as user messages
-- Built-in rules: test-first, YAGNI, no-impl-before-spec
-- Custom rules via markdown files with frontmatter
-
-### 💰 Cost Tracking
-Session-level cost tracking with configurable limits:
-- Warning at configurable threshold (default $5)
-- Hard limit with mid-stream abort (default $20)
-- Per-dispatch and cumulative cost display
+It also makes your AI follow TDD whether it wants to or not. Try to write code without a test? **Blocked.** Try to rationalize skipping tests? A rule fires and says "no." The three-layer defense (mechanical guard + context rules + methodology skills) makes test-first the path of least resistance.
 
 ## Installation
 
@@ -45,146 +30,331 @@ Session-level cost tracking with configurable limits:
 pi install npm:pi-superteam
 ```
 
-Or for development:
+**Try without installing:**
 ```bash
-pi -e /path/to/superteam/src/index.ts
+pi -e npm:pi-superteam
+```
+
+**Development mode:**
+```bash
+git clone https://github.com/coctostan/pi-superteam.git
+pi -e ./pi-superteam/src/index.ts
 ```
 
 ## Quick Start
 
-### Direct Agent Dispatch
-```
-# Scout the codebase
-Use the team tool to dispatch scout to find all authentication-related code
+### Dispatch agents directly
 
-# Parallel reviews
-Use team in parallel mode: security-reviewer on src/auth/, quality-reviewer on src/auth/
+Ask pi to use the `team` tool. It'll show up automatically:
 
-# Chain: explore then implement
-Use team in chain mode: scout finds the relevant code, then implementer adds input validation
 ```
+> Have the scout agent find all authentication-related code in this project
 
-### SDD Workflow
-```
-/sdd load plan.md     # Load a plan with tasks
-/sdd run              # Run SDD for current task
-/sdd status           # Check progress
-/sdd next             # Advance to next task
+> Use team in parallel mode — send security-reviewer and quality-reviewer
+  to analyze src/auth/
+
+> Chain: scout maps the database layer, then architect reviews the structure
 ```
 
-### TDD Control
+### Enable TDD enforcement
+
 ```
-/tdd                  # Toggle: off → tdd → atdd → off
-/tdd tdd              # Enable TDD mode
-/tdd atdd             # Enable ATDD mode
-/tdd off              # Disable
-/tdd allow-bash-write once "generating config"  # One-time escape hatch
+/tdd tdd
 ```
 
-### Prompt Templates
+Now try writing code without a test:
 ```
-/sdd plan.md          # Start SDD for a plan
-/review-parallel src/ # Parallel review of a directory
-/scout auth module    # Scout a specific area
-/implement pagination # Chain: scout → implementer
+> Write src/utils.ts with a helper function
+
+🚫 TDD: Create a test file first. Expected: src/utils.test.ts
+   Write a failing test, run it, then implement.
 ```
 
-## Available Agents
+The AI learns fast. After one block, it writes tests first on its own.
 
-| Agent | Role | Tools |
-|-------|------|-------|
-| `scout` | Fast codebase reconnaissance | read, grep, find, ls, bash |
-| `implementer` | TDD implementation (with guard) | all tools |
-| `spec-reviewer` | Verify spec compliance | read, grep, find, ls |
-| `quality-reviewer` | Code + test quality | read, grep, find, ls |
-| `security-reviewer` | Vulnerability scanning | read, grep, find, ls |
-| `performance-reviewer` | Performance analysis | read, grep, find, ls |
-| `architect` | Design + structure review | read, grep, find, ls |
+### Run an automated SDD workflow
 
-## Configuration
+Create a plan:
+```markdown
+# Feature: Rate Limiting
 
-Create `.superteam.json` in your project root:
+\`\`\`superteam-tasks
+- title: Token bucket implementation
+  description: Implement token bucket rate limiter with configurable rate and burst
+  files: [src/rate-limiter.ts]
+- title: Middleware integration
+  description: Express middleware that applies rate limiting per IP
+  files: [src/middleware/rate-limit.ts]
+\`\`\`
+```
+
+Then:
+```
+/sdd load plan.md
+/sdd run
+```
+
+Superteam dispatches the implementer (with TDD enforcement), runs spec + quality reviews, fixes issues automatically, and advances to the next task.
+
+---
+
+## Features
+
+### 🤖 Multi-Agent Dispatch
+
+The `team` tool dispatches specialized agents in isolated subprocesses. Each gets its own context window, model, and tools — no cross-contamination.
+
+**Three dispatch modes:**
+
+| Mode | Usage | Description |
+|------|-------|-------------|
+| **Single** | `agent` + `task` | One agent, one task |
+| **Parallel** | `tasks: [{agent, task}, ...]` | Up to 8 concurrent agents |
+| **Chain** | `chain: [{agent, task}, ...]` | Sequential, `{previous}` passes context |
+
+```
+# Single — scout explores
+Dispatch scout to find all files that handle payment processing
+
+# Parallel — multiple reviewers at once  
+Run security-reviewer and performance-reviewer in parallel on src/api/
+
+# Chain — scout feeds implementer
+Chain: scout finds the auth module, then implementer adds rate limiting.
+Use {previous} to pass scout's findings.
+```
+
+### 🧪 TDD Guard
+
+Hard enforcement at the tool level. The guard intercepts every `write`, `edit`, and `bash` call:
+
+```
+write(src/foo.ts)  →  Test file exists?  →  Tests run?  →  ✅ ALLOW
+                          ↓ No                 ↓ No
+                    🚫 "Create test first"  🚫 "Run tests first"
+```
+
+**Three-layer defense:**
+
+| Layer | What | When |
+|-------|------|------|
+| **Rules** | Injects "write tests first" into context | Agent *thinks* about skipping tests |
+| **Guard** | Blocks the `write`/`edit` tool call | Agent *tries* to skip tests |
+| **Skills** | Teaches RED→GREEN→REFACTOR | Agent *doesn't know* the methodology |
+
+**ATDD mode** adds acceptance test awareness — warns when writing unit tests without an acceptance test to frame the feature.
+
+### 🔄 SDD Orchestration
+
+Automated implement → review → fix loops:
+
+```
+/sdd load plan.md     Load tasks from a plan file
+/sdd run              Execute current task through the pipeline
+/sdd status           View progress across all tasks
+/sdd next             Advance to next task
+/sdd reset            Start over
+```
+
+**Pipeline per task:**
+1. 🔨 **Implement** — dispatches implementer with TDD enforcement
+2. 📋 **Spec review** — verifies implementation matches requirements
+3. ✨ **Quality review** — checks code quality and test quality
+4. 🔒 **Security review** — scans for vulnerabilities (optional, parallel)
+5. ⚡ **Performance review** — identifies bottlenecks (optional, parallel)
+6. 🔧 **Fix loop** — on failure, re-dispatches implementer with specific findings
+7. 🚨 **Escalation** — after max retries, asks you for help
+
+Reviews return structured JSON — no LLM needed to interpret results:
+````
+```superteam-json
+{
+  "passed": false,
+  "findings": [{ "severity": "high", "file": "src/auth.ts", "line": 42, "issue": "..." }],
+  "mustFix": ["src/auth.ts:42"],
+  "summary": "Missing input validation on login endpoint"
+}
+```
+````
+
+### 📏 Context-Aware Rules
+
+TTSR-inspired rule injection. When the AI's output matches a trigger pattern, corrective guidance is injected into the next turn's context.
+
+**Built-in rules:**
+
+| Rule | Triggers on | Action |
+|------|------------|--------|
+| `test-first` | "simple enough to skip tests" | Fires once: "Write tests first. No exceptions." |
+| `yagni` | "might need later", "future-proof" | Cooldown: "Implement only what's needed now." |
+| `no-impl-before-spec` | "let me just implement" | Per-turn: "Stop. Write the test first." |
+
+**Create your own:**
+```markdown
+---
+name: no-any
+trigger: ": any\\b|as any\\b"
+priority: medium
+frequency: per-turn
+---
+Do NOT use `any` type. Use proper TypeScript types, generics, or `unknown`.
+```
+
+### 💰 Cost Tracking
+
+Session-level budget with mid-stream enforcement:
+
+```
+/team                            # Shows cumulative session cost
+```
 
 ```json
 {
-  "configVersion": 1,
-  "tddMode": "off",
-  "testFilePatterns": ["*.test.ts", "*.spec.ts", "__tests__/*.ts"],
-  "testCommands": ["npm test", "bun test", "npx jest", "npx vitest"],
-  "exemptPaths": ["*.d.ts", "*.config.*", "migrations/*"],
-  "testFileMapping": {
-    "strategies": [
-      { "type": "suffix", "implSuffix": ".ts", "testSuffix": ".test.ts" },
-      { "type": "suffix", "implSuffix": ".ts", "testSuffix": ".spec.ts" },
-      { "type": "directory", "testDir": "__tests__" }
-    ],
-    "overrides": {}
-  },
-  "review": {
-    "maxIterations": 3,
-    "required": ["spec", "quality"],
-    "optional": ["security", "performance"],
-    "parallelOptional": true
-  },
-  "agents": {
-    "defaultModel": "claude-sonnet-4-5",
-    "scoutModel": "claude-haiku-4-5",
-    "modelOverrides": {}
-  },
   "costs": {
-    "warnAtUsd": 5.0,
-    "hardLimitUsd": 20.0
+    "warnAtUsd": 5.0,       // Notification at $5
+    "hardLimitUsd": 20.0     // Hard block + subprocess kill at $20
   }
 }
 ```
 
-## Custom Agents
+---
 
-Add custom agents as markdown files with YAML frontmatter:
+## Agents
 
-**User agents** (`~/.pi/agent/agents/*.md`):
+| Agent | Purpose | Tools | Model |
+|-------|---------|-------|-------|
+| 🔍 `scout` | Fast codebase recon | read, grep, find, ls, bash | haiku |
+| 🔨 `implementer` | TDD implementation | all (+ TDD guard) | sonnet |
+| 📋 `spec-reviewer` | Spec compliance check | read-only | sonnet |
+| ✨ `quality-reviewer` | Code + test quality | read-only | sonnet |
+| 🔒 `security-reviewer` | Vulnerability scanning | read-only | sonnet |
+| ⚡ `performance-reviewer` | Bottleneck detection | read-only | sonnet |
+| 🏗️ `architect` | Design + structure review | read-only | sonnet |
+
+**Custom agents** — drop a `.md` file in `~/.pi/agent/agents/`:
+
 ```markdown
 ---
-name: my-reviewer
-description: Custom domain-specific reviewer
+name: api-reviewer
+description: REST API design review
 tools: read,grep,find,ls
 model: claude-sonnet-4-5
 ---
-You are a reviewer focused on [domain]. Check for [specific concerns].
+Review REST API design for consistency, proper HTTP methods, status codes,
+pagination, error format, and versioning strategy.
 
-End with a ```superteam-json block with ReviewFindings JSON.
+End with a ```superteam-json block.
 ```
 
-**Project agents** (`.pi/agents/*.md`) — require `includeProjectAgents: true`.
+See the [Agent Guide](docs/guides/agents.md) for details.
+
+---
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/team` | List agents and session cost |
+| `/tdd [off\|tdd\|atdd]` | Toggle TDD enforcement mode |
+| `/tdd allow-bash-write once <reason>` | One-time bash write escape hatch |
+| `/sdd load <file>` | Load a plan file |
+| `/sdd run` | Run SDD for current task |
+| `/sdd status` | Show task progress |
+| `/sdd next` | Advance to next task |
+| `/sdd reset` | Reset SDD state |
+
+## Prompt Templates
+
+| Template | Description |
+|----------|-------------|
+| `/sdd <plan.md>` | Start SDD for a plan |
+| `/review-parallel <target>` | Parallel spec + quality review |
+| `/scout <area>` | Scout a codebase area |
+| `/implement <feature>` | Chain: scout → implementer |
+
+---
+
+## Configuration
+
+Create `.superteam.json` in your project root. All settings are optional — defaults are sensible.
+
+```json
+{
+  "configVersion": 1,
+  "tddMode": "tdd",
+  "testFilePatterns": ["*.test.ts", "*.spec.ts"],
+  "testCommands": ["npm test", "npx vitest"],
+  "exemptPaths": ["*.d.ts", "*.config.*"],
+  "agents": {
+    "scoutModel": "claude-haiku-4-5",
+    "modelOverrides": {
+      "implementer": "claude-opus-4-6"
+    }
+  },
+  "costs": {
+    "warnAtUsd": 10.0,
+    "hardLimitUsd": 50.0
+  }
+}
+```
+
+See the [Configuration Guide](docs/guides/configuration.md) for the full reference.
+
+---
 
 ## Architecture
 
 ```
-src/
-  index.ts              — Extension entry point (thin composition root)
-  config.ts             — Config discovery, defaults, packageDir resolution
-  dispatch.ts           — Agent loading, subprocess spawning, cost tracking
-  review-parser.ts      — Structured reviewer JSON extraction + validation
-  rules/
-    engine.ts           — TTSR-like context-aware rule injection
-  workflow/
-    state.ts            — Plan tracking, persistence, widget rendering
-    tdd-guard.ts        — TDD/ATDD enforcement via tool_call interception
-    sdd.ts              — SDD orchestration loop
-
-agents/                 — Agent profiles (markdown with frontmatter)
-skills/                 — Methodology skills (TDD, ATDD, SDD, planning)
-rules/                  — Context rules (test-first, YAGNI, no-impl-before-spec)
-prompts/                — Prompt templates for common workflows
+pi-superteam/
+│
+├── src/                          TypeScript extension source
+│   ├── index.ts                  Entry point (thin composition root)
+│   ├── config.ts                 Config discovery + defaults
+│   ├── dispatch.ts               Agent subprocess management
+│   ├── review-parser.ts          Structured JSON extraction
+│   ├── rules/engine.ts           Context-aware rule injection
+│   └── workflow/
+│       ├── state.ts              Plan tracking + persistence
+│       ├── tdd-guard.ts          TDD enforcement
+│       └── sdd.ts                SDD orchestration loop
+│
+├── agents/                       Agent profiles (7 built-in)
+├── skills/                       Methodology skills (5)
+├── rules/                        Context rules (3)
+├── prompts/                      Prompt templates (4)
+└── docs/guides/                  Documentation
 ```
+
+**Design principles:**
+- `index.ts` is a thin composition root — no business logic
+- Every piece works independently (TDD guard without SDD, team tool without TDD, rules without either)
+- Graceful degradation — missing models, unavailable tools, broken config all handled
+- JSON-serializable state — no Maps or Sets, persistence via `pi.appendEntry()`
+- Deterministic subprocesses — full isolation with explicit add-backs
+
+---
+
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [Agents](docs/guides/agents.md) | Built-in agents, custom agents, model config, subprocess isolation |
+| [TDD Guard](docs/guides/tdd-guard.md) | Enforcement mechanics, file mapping, modes, escape hatches |
+| [SDD Workflow](docs/guides/sdd-workflow.md) | Plan format, review pipeline, fix loops, escalation |
+| [Configuration](docs/guides/configuration.md) | Full `.superteam.json` reference |
+| [Rules](docs/guides/rules.md) | How rules work, built-in rules, creating custom rules |
+| [Contributing](CONTRIBUTING.md) | Development setup, project structure, PR guidelines |
+| [Changelog](CHANGELOG.md) | Release notes |
+
+---
 
 ## Credits
 
 - TDD/SDD methodology adapted from [obra/superpowers](https://github.com/obra/superpowers) (MIT)
 - TTSR concept inspired by [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi) (MIT)
-- Agent dispatch pattern from pi's built-in [subagent example](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/examples/extensions/subagent)
+- Agent dispatch patterns from pi's built-in [subagent example](https://github.com/badlogic/pi-mono)
 - LSP integration via [lsp-pi](https://www.npmjs.com/package/lsp-pi) (MIT, optional)
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)

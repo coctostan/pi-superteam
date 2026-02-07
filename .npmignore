@@ -1,0 +1,14 @@
+# Development files
+docs/plans/
+.superteam.json
+.git/
+.github/
+*.tgz
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

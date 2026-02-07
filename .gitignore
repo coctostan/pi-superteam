@@ -5,3 +5,4 @@ dist/
 *.d.ts
 !src/**/*.d.ts
 .superteam.json
+*.tgz

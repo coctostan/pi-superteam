@@ -1,10 +1,43 @@
 {
   "name": "pi-superteam",
   "version": "0.1.0",
-  "description": "Pi extension: TDD/ATDD enforcement, specialized agent dispatch, iterative review cycles, context-aware rules",
-  "keywords": ["pi-package"],
+  "description": "Multi-agent orchestration, TDD enforcement, iterative review cycles, and context-aware rules for pi",
+  "keywords": [
+    "pi-package",
+    "tdd",
+    "atdd",
+    "code-review",
+    "multi-agent",
+    "subagent",
+    "testing",
+    "developer-tools"
+  ],
   "license": "MIT",
+  "author": "coctostan",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/coctostan/pi-superteam.git"
+  },
+  "homepage": "https://github.com/coctostan/pi-superteam#readme",
+  "bugs": {
+    "url": "https://github.com/coctostan/pi-superteam/issues"
+  },
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "src/",
+    "agents/",
+    "skills/",
+    "rules/",
+    "prompts/",
+    "docs/guides/",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "LICENSE"
+  ],
   "pi": {
     "extensions": ["src/index.ts"],
     "skills": ["skills"],
