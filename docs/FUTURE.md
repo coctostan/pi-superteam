@@ -1,0 +1,137 @@
+# Future Plans
+
+Living document tracking potential features, known weaknesses, use cases to explore, and lessons learned. Items are roughly prioritized within each section.
+
+---
+
+## Immediate (post-redesign)
+
+### Planner prompt refinement
+The GPT-generated implementation plan was structurally better but lacked inline test code for complex tasks. Opus had great test code but weaker structure. After executing the merged plan, refine the planner agent's system prompt:
+- Require complete inline test code for complex tasks (parsers, state machines, multi-step phase logic)
+- Allow prose-only test descriptions for simple tasks (agent profiles, config changes, docs)
+- Add examples of good vs bad task granularity
+
+### Plan file path brittleness
+The plan-write phase expects the planner agent to write a file to a specific path passed in the prompt. If the agent writes it elsewhere (or doesn't write it at all), the phase fails. Need fallback: search `docs/plans/` for recently written `.md` files, or parse the agent's output for the actual path used.
+
+### Brainstorm skip option
+Not every task needs brainstorming. Add `/workflow --skip-brainstorm "description"` that jumps straight to plan-write with the raw description. Also allow skipping from the brainstorm phase itself: after scout completes, offer "Skip to planning" alongside the questions flow.
+
+### Resume UX
+When resuming `/workflow` mid-brainstorm, the user sees the next unanswered question with no context about what they already answered. Show a brief recap: "You've answered 3/5 questions so far. Continuing from question 4..."
+
+---
+
+## Features
+
+### Parallel task execution
+The execute phase runs tasks sequentially. Some tasks are independent and could run in parallel (especially tests, docs, or tasks touching different files). Use the dependency graph from the plan to identify parallelizable batches. Dispatch multiple implementers simultaneously via `dispatchParallel`. Challenge: merge conflicts between parallel agents.
+
+### Git worktree integration
+Superpowers uses git worktrees to isolate parallel agent work. Each implementer gets its own worktree, preventing conflicts. After both complete, the orchestrator merges worktrees. Requires: `git-utils.ts` additions for worktree create/merge/cleanup.
+
+### Cost estimation before execution
+After plan approval, estimate total cost based on task count × average cost per task (tracked from history). Show: "Estimated cost: $4-8 for 7 tasks. Proceed?" Save per-task cost history in `.superteam-history.json` for improving estimates over time.
+
+### Task-level git commits
+Currently the implementer is told to commit after each task. Make this orchestrator-controlled: after a task passes all reviews, the orchestrator commits with a standardized message format. Gives consistent commit history and enables clean rollback per task.
+
+### Rollback on failure
+If a task fails after max retries, offer to rollback to the pre-task git SHA. The execute phase already records `gitShaBefore` — just need `git reset --hard <sha>` and a confirmation dialog.
+
+### Custom review profiles
+Allow users to define project-specific review criteria in `.superteam.json`. Example: a security-focused project might want security review on every task (not just optional), while a prototype might want no reviews at all. Shape: `review.profiles: { "strict": [...], "fast": [...] }`.
+
+### Model rotation / fallback
+If a model fails (rate limit, outage), try an alternative model before erroring. Config: `modelFallbacks: { "claude-opus-4-6": ["gpt-5.2", "gemini-3-pro-high"] }`. The dispatch layer retries with the next model in the chain.
+
+### Incremental plan updates
+When a task reveals new requirements or the plan needs adjustment mid-execution, allow the user to trigger a plan revision without restarting. `/workflow revise` → edit plan in editor → re-parse tasks → continue from current position.
+
+### Session cost dashboard
+A widget or command (`/workflow costs`) showing cost breakdown by phase, by agent, by task. Which agents are expensive? Which tasks took the most retries?
+
+### Template workflows
+Pre-defined workflow templates for common tasks: "Add REST endpoint", "Add database migration", "Refactor module", "Add test coverage". Each template pre-fills brainstorm questions and approach recommendations.
+
+### Multi-model brainstorming
+During the approaches step, dispatch 2-3 different models (e.g., Claude, GPT, Gemini) to independently propose approaches. Present all proposals together. Different models catch different things.
+
+### Plan diff on revision
+When the planner revises a plan (after review failure or user feedback), show a diff of what changed rather than re-presenting the entire plan. Makes review faster.
+
+### Workflow history
+Track completed workflows in `.superteam-history.json`: what was built, how many tasks, total cost, time elapsed, which tasks failed. Useful for cost estimation and process improvement.
+
+---
+
+## Weaknesses / Known Issues
+
+### Agent output parsing fragility
+We rely on agents producing structured output in fenced code blocks (`superteam-brainstorm`, `superteam-json`, `superteam-tasks`). Different models have different reliability here. GPT sometimes wraps JSON in markdown prose. Gemini sometimes adds trailing commas. The parsers need to be defensive. Current mitigation: retry once with format reminder. Better: model-specific format instructions, or a post-processing normalization step.
+
+### Brainstorm question quality varies by model
+The brainstormer agent's question quality depends heavily on the model. Cheaper models ask vague questions. Expensive models ask precise, actionable ones. The model assignment matters a lot here — don't skimp.
+
+### No abort signal for running agents
+When the user wants to abort mid-agent-dispatch, there's no clean way to kill the subprocess. The `signal` parameter exists but `pi --mode json` doesn't handle SIGTERM gracefully in all cases. The agent might leave partial files. Mitigation: always commit before each task so `git reset` works.
+
+### Context window pressure on large plans
+For plans with 15+ tasks, the execute phase's cumulative state (all task results, review findings, changed files) can get large. The orchestrator should trim completed task details from the active context, keeping only summaries.
+
+### Scout output quality
+The scout agent's codebase summary varies wildly in quality. Sometimes it maps the whole project structure; sometimes it fixates on one directory. The scout prompt needs iteration. Consider: a structured scout output format (similar to `superteam-brainstorm`) instead of free-form text.
+
+### No validation of agent-written files
+When the planner or implementer writes files, we don't validate that the files compile/parse before proceeding. A syntax error in a plan file wastes a review cycle. Consider: run a quick `tsc --noEmit` or `node --check` on written files as a pre-review gate.
+
+### Test-file-only changes pass review
+If an implementer only writes tests and no implementation, the spec reviewer may pass it because "tests exist." The review prompt should explicitly check that implementation files were modified, not just test files.
+
+### Single-reviewer bottleneck
+Spec review and quality review run sequentially. For large tasks with many files, this adds up. Consider parallelizing the two reviews when possible (they're independent checks).
+
+### No learning from past workflows
+Each workflow starts from scratch. The orchestrator doesn't learn from past successes/failures. Future: use workflow history to pre-populate brainstorm answers, suggest proven approaches, warn about historically problematic patterns.
+
+---
+
+## Use Cases to Explore
+
+### Greenfield project bootstrap
+`/workflow "Create a new Express API with TypeScript, Prisma, and JWT auth"` — the brainstorm phase maps the empty (or near-empty) project, proposes project structure, generates the full scaffold plan. Challenge: scout has nothing to scan.
+
+### Large refactoring
+`/workflow "Migrate from REST to GraphQL"` — cross-cutting change touching many files. Tests the planner's ability to order tasks with complex dependencies and the execute phase's ability to handle cascading changes.
+
+### Bug investigation + fix
+`/workflow "Fix: users can't log in after password reset"` — brainstorm should ask diagnostic questions, scout should focus on auth-related code, approach should be investigation-first. Different flow than feature development.
+
+### Documentation overhaul
+`/workflow "Add comprehensive API documentation for all endpoints"` — no code changes, just docs. Tests whether the workflow handles non-code tasks gracefully. Implementer writes markdown, not TypeScript.
+
+### Monorepo multi-package work
+`/workflow "Add shared logging utility used by api/ and worker/ packages"` — touches multiple packages in a monorepo. Scout needs to map cross-package dependencies. Plan needs package-aware task ordering.
+
+### Security audit
+`/workflow "Audit all API endpoints for authentication and authorization gaps"` — investigation-heavy, might not produce code changes. Brainstorm phase should produce an audit plan, not an implementation plan. Need a way to switch the plan format from "TDD implementation" to "investigation report."
+
+### Performance optimization
+`/workflow "Reduce API response time for /users endpoint from 500ms to <100ms"` — needs benchmarking steps in the plan. Implementer needs to run benchmarks, not just tests. Challenge: what's the "test" for a performance task?
+
+---
+
+## Process / Meta
+
+### Plan quality feedback loop
+After a workflow completes, ask the user: "How was the plan quality? (1-5)" and "Which tasks needed the most rework?" Store this feedback and use it to refine the planner prompt over time.
+
+### Agent evaluation harness
+Build a test harness that runs the same task against different agent configurations (model, thinking level, prompt variations) and compares output quality. Useful for: finding optimal model assignments, testing prompt changes, benchmarking new models.
+
+### Cost optimization experiments
+Track cost per task across different model configurations. Is `claude-opus-4-6` for implementation worth 3x the cost of `claude-sonnet-4-5`? Does `gpt-5.2` for architecture review catch more issues than `claude-sonnet-4-5`? Data-driven model selection.
+
+### Extension marketplace
+If pi gets an extension marketplace, `pi-superteam` could be published there. Need: clean README, good defaults that work without `.superteam.json`, sensible model fallbacks for users without all providers configured.
