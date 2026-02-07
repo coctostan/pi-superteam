@@ -43,6 +43,24 @@ pi -e ./pi-superteam/src/index.ts
 
 ## Quick Start
 
+### Run an orchestrated workflow
+
+The fastest way to get going — the orchestrator handles everything end-to-end:
+
+```
+/workflow Add rate limiting with token bucket algorithm
+```
+
+The orchestrator automatically:
+1. **Scouts** your codebase to understand the project
+2. **Drafts a plan** with concrete tasks
+3. **Reviews the plan** (architect + spec reviewer)
+4. **Asks you** to approve the plan and configure execution
+5. **Executes each task** through implement → review → fix loops (with TDD enforced)
+6. **Finalizes** with a cross-task review and summary report
+
+State persists to `.superteam-workflow.json` — resume anytime with `/workflow`.
+
 ### Dispatch agents directly
 
 Ask pi to use the `team` tool. It'll show up automatically:
@@ -72,22 +90,6 @@ Now try writing code without a test:
 
 The AI learns fast. After one block, it writes tests first on its own.
 
-### Run an orchestrated workflow
-
-```
-/workflow Add rate limiting with token bucket algorithm
-```
-
-The orchestrator automatically:
-1. **Scouts** your codebase to understand the project
-2. **Drafts a plan** with concrete tasks
-3. **Reviews the plan** (architect + spec reviewer)
-4. **Asks you** to approve the plan and pick an execution mode
-5. **Executes each task** through implement → review → fix loops (with TDD enforced)
-6. **Finalizes** with a cross-task review and summary report
-
-State persists to `.superteam-workflow.json` — resume anytime with `/workflow`.
-
 ### Run individual tasks with SDD
 
 For more control, use `/sdd` to run individual tasks through the review pipeline:
@@ -103,14 +105,14 @@ For more control, use `/sdd` to run individual tasks through the review pipeline
 
 ### 🤖 Multi-Agent Dispatch
 
-The `team` tool dispatches specialized agents in isolated subprocesses. Each gets its own context window, model, and tools — no cross-contamination.
+The `team` tool dispatches specialized agents in isolated subprocesses. Each gets its own context window, model, thinking level, and tools — no cross-contamination.
 
 **Three dispatch modes:**
 
 | Mode | Usage | Description |
 |------|-------|-------------|
 | **Single** | `agent` + `task` | One agent, one task |
-| **Parallel** | `tasks: [{agent, task}, ...]` | Up to 8 concurrent agents |
+| **Parallel** | `tasks: [{agent, task}, ...]` | Up to 8 concurrent agents (4 concurrency limit) |
 | **Chain** | `chain: [{agent, task}, ...]` | Sequential, `{previous}` passes context |
 
 ```
@@ -124,6 +126,29 @@ Run security-reviewer and performance-reviewer in parallel on src/api/
 Chain: scout finds the auth module, then implementer adds rate limiting.
 Use {previous} to pass scout's findings.
 ```
+
+### 🎯 Workflow Orchestrator
+
+A deterministic state machine that drives the full development pipeline — agents do creative work, the orchestrator controls flow.
+
+```
+/workflow <description>    Start a new orchestrated workflow
+/workflow                  Resume an in-progress workflow
+/workflow status           Show current phase, task progress, cost
+/workflow abort            Abort and clear state
+```
+
+**Five phases:**
+
+| Phase | What happens |
+|-------|-------------|
+| **plan-draft** | Scout explores codebase, implementer (as planner) writes a task plan |
+| **plan-review** | Architect + spec reviewer validate the plan (iterative revision supported) |
+| **configure** | You pick review mode, execution mode, and batch size |
+| **execute** | Implement → spec review → quality review → optional reviews per task, with fix loops |
+| **finalize** | Final cross-task quality review + summary report |
+
+The workflow persists to `.superteam-workflow.json` and resumes from where it left off. See the [Workflow Guide](docs/guides/workflow.md) for details.
 
 ### 🧪 TDD Guard
 
@@ -147,7 +172,7 @@ write(src/foo.ts)  →  Test file exists?  →  Tests run?  →  ✅ ALLOW
 
 ### 🔄 SDD Orchestration
 
-Automated implement → review → fix loops:
+Automated implement → review → fix loops for individual tasks:
 
 ```
 /sdd load plan.md     Load tasks from a plan file
@@ -177,29 +202,6 @@ Reviews return structured JSON — no LLM needed to interpret results:
 }
 ```
 ````
-
-### 🎯 Workflow Orchestrator
-
-A deterministic state machine that drives the full development pipeline — agents do creative work, the orchestrator controls flow.
-
-```
-/workflow <description>    Start a new orchestrated workflow
-/workflow                  Resume an in-progress workflow
-/workflow status           Show current phase, task progress, cost
-/workflow abort            Abort and clear state
-```
-
-**Five phases:**
-
-| Phase | What happens |
-|-------|-------------|
-| **plan-draft** | Scout explores codebase, planner writes a task plan |
-| **plan-review** | Architect + spec reviewer validate the plan |
-| **configure** | You pick execution mode (auto / checkpoint / batch) |
-| **execute** | Implement → review → fix loop per task, with TDD enforced |
-| **finalize** | Final cross-task review + summary report |
-
-The workflow persists to `.superteam-workflow.json` and resumes from where it left off. See the [Workflow Guide](docs/guides/workflow.md) for details.
 
 ### 📏 Context-Aware Rules
 
@@ -245,15 +247,17 @@ Session-level budget with mid-stream enforcement:
 
 ## Agents
 
-| Agent | Purpose | Tools | Model |
-|-------|---------|-------|-------|
+| Agent | Purpose | Tools | Default Model |
+|-------|---------|-------|---------------|
 | 🔍 `scout` | Fast codebase recon | read, grep, find, ls, bash | haiku |
-| 🔨 `implementer` | TDD implementation | all (+ TDD guard) | sonnet |
-| 📋 `spec-reviewer` | Spec compliance check | read-only | sonnet |
-| ✨ `quality-reviewer` | Code + test quality | read-only | sonnet |
-| 🔒 `security-reviewer` | Vulnerability scanning | read-only | sonnet |
-| ⚡ `performance-reviewer` | Bottleneck detection | read-only | sonnet |
-| 🏗️ `architect` | Design + structure review | read-only | sonnet |
+| 🔨 `implementer` | TDD implementation | all (+ TDD guard + TDD skill) | sonnet |
+| 📋 `spec-reviewer` | Spec compliance check | read, grep, find, ls | sonnet |
+| ✨ `quality-reviewer` | Code + test quality | read, grep, find, ls | sonnet |
+| 🔒 `security-reviewer` | Vulnerability scanning | read, grep, find, ls | sonnet |
+| ⚡ `performance-reviewer` | Bottleneck detection | read, grep, find, ls | sonnet |
+| 🏗️ `architect` | Design + structure review | read, grep, find, ls | sonnet |
+
+All models and thinking levels are configurable per agent via `modelOverrides` and `thinkingOverrides` in `.superteam.json`. The `/team` command shows the effective model and thinking level for each agent, with annotations showing whether values come from config overrides, frontmatter, or defaults.
 
 **Custom agents** — drop a `.md` file in `~/.pi/agent/agents/`:
 
@@ -263,6 +267,7 @@ name: api-reviewer
 description: REST API design review
 tools: read,grep,find,ls
 model: claude-sonnet-4-5
+thinking: high
 ---
 Review REST API design for consistency, proper HTTP methods, status codes,
 pagination, error format, and versioning strategy.
@@ -278,8 +283,9 @@ See the [Agent Guide](docs/guides/agents.md) for details.
 
 | Command | Description |
 |---------|-------------|
-| `/team` | List agents and session cost |
-| `/tdd [off\|tdd\|atdd]` | Toggle TDD enforcement mode |
+| `/team` | List agents with effective models/thinking levels and session cost |
+| `/team --project` | Include project-local agents from `.pi/agents/` |
+| `/tdd [off\|tdd\|atdd]` | Toggle/set TDD enforcement mode |
 | `/tdd allow-bash-write once <reason>` | One-time bash write escape hatch |
 | `/workflow <description>` | Start a new orchestrated workflow |
 | `/workflow` | Resume an in-progress workflow |
@@ -290,6 +296,13 @@ See the [Agent Guide](docs/guides/agents.md) for details.
 | `/sdd status` | Show task progress |
 | `/sdd next` | Advance to next task |
 | `/sdd reset` | Reset SDD state |
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `team` | Dispatch agents (single, parallel, chain modes) — available to the AI |
+| `workflow` | Run the orchestrator — available to the AI |
 
 ## Prompt Templates
 
@@ -314,6 +327,7 @@ Create `.superteam.json` in your project root. All settings are optional — def
   "testCommands": ["npm test", "npx vitest"],
   "exemptPaths": ["*.d.ts", "*.config.*"],
   "agents": {
+    "defaultModel": "claude-sonnet-4-5",
     "scoutModel": "claude-haiku-4-5",
     "modelOverrides": {
       "implementer": "claude-opus-4-6"
@@ -331,6 +345,12 @@ Create `.superteam.json` in your project root. All settings are optional — def
 }
 ```
 
+**Model override priority:** `config.agents.modelOverrides[name]` → agent frontmatter `model` → `scoutModel` (for scout) → `defaultModel`
+
+**Thinking override priority:** `config.agents.thinkingOverrides[name]` → agent frontmatter `thinking` → undefined (no thinking)
+
+**Valid thinking levels:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh` — invalid values are warned and dropped during config loading.
+
 See the [Configuration Guide](docs/guides/configuration.md) for the full reference.
 
 ---
@@ -340,30 +360,66 @@ See the [Configuration Guide](docs/guides/configuration.md) for the full referen
 ```
 pi-superteam/
 │
-├── src/                          TypeScript extension source
-│   ├── index.ts                  Entry point (thin composition root)
-│   ├── config.ts                 Config discovery + defaults
-│   ├── dispatch.ts               Agent subprocess management
-│   ├── review-parser.ts          Structured JSON extraction
-│   ├── rules/engine.ts           Context-aware rule injection
+├── src/                              TypeScript extension source
+│   ├── index.ts                      Entry point (thin composition root)
+│   ├── config.ts                     Config discovery, defaults, ThinkingLevel type
+│   ├── dispatch.ts                   Agent subprocess management, resolveAgentModel/Thinking
+│   ├── team-display.ts               /team command formatting (formatAgentLine)
+│   ├── review-parser.ts              Structured JSON extraction from reviewer output
+│   ├── rules/engine.ts               Context-aware rule injection (TTSR)
 │   └── workflow/
-│       ├── state.ts              Plan tracking + persistence
-│       ├── tdd-guard.ts          TDD enforcement
-│       └── sdd.ts                SDD orchestration loop
+│       ├── state.ts                  SDD plan tracking + persistence
+│       ├── tdd-guard.ts              TDD enforcement (tool call interception)
+│       ├── sdd.ts                    SDD orchestration loop
+│       ├── orchestrator.ts           Workflow orchestrator entry point + phase dispatch
+│       ├── orchestrator-state.ts     Typed state, persistence, phase transitions
+│       ├── prompt-builder.ts         Deterministic prompt construction for all agents
+│       ├── interaction.ts            Structured user interaction helpers
+│       ├── git-utils.ts              Async git utilities (tracked files, changed files, SHA)
+│       └── phases/
+│           ├── plan.ts               Plan draft phase (scout + planner)
+│           ├── plan-review.ts        Plan review phase (architect + spec reviewer)
+│           ├── configure.ts          Configure phase (review mode, exec mode, batch size)
+│           ├── execute.ts            Execute phase (implement → review → fix loops)
+│           └── finalize.ts           Finalize phase (cross-task review + report)
 │
-├── agents/                       Agent profiles (7 built-in)
-├── skills/                       Methodology skills (5)
-├── rules/                        Context rules (3)
-├── prompts/                      Prompt templates (4)
-└── docs/guides/                  Documentation
+├── agents/                           Agent profiles (7 built-in)
+│   ├── scout.md
+│   ├── implementer.md
+│   ├── spec-reviewer.md
+│   ├── quality-reviewer.md
+│   ├── security-reviewer.md
+│   ├── performance-reviewer.md
+│   └── architect.md
+│
+├── skills/                           Methodology skills (5)
+│   ├── test-driven-development/
+│   ├── acceptance-test-driven-development/
+│   ├── subagent-driven-development/
+│   ├── writing-plans/
+│   └── brainstorming/
+│
+├── rules/                            Context rules (3)
+│   ├── test-first.md
+│   ├── yagni.md
+│   └── no-impl-before-spec.md
+│
+├── prompts/                          Prompt templates (4)
+│   ├── sdd.md
+│   ├── review-parallel.md
+│   ├── scout.md
+│   └── implement.md
+│
+└── docs/guides/                      Documentation
 ```
 
 **Design principles:**
 - `index.ts` is a thin composition root — no business logic
 - Every piece works independently (TDD guard without SDD, team tool without TDD, rules without either)
 - Graceful degradation — missing models, unavailable tools, broken config all handled
-- JSON-serializable state — no Maps or Sets, persistence via `pi.appendEntry()`
+- JSON-serializable state — no Maps or Sets, persistence via file or `pi.appendEntry()`
 - Deterministic subprocesses — full isolation with explicit add-backs
+- Workflow orchestrator is a pure state machine — agents do creative work, TypeScript controls flow
 
 ---
 
@@ -372,7 +428,7 @@ pi-superteam/
 | Guide | Description |
 |-------|-------------|
 | [Workflow](docs/guides/workflow.md) | Orchestrator phases, interaction points, execution modes, resuming |
-| [Agents](docs/guides/agents.md) | Built-in agents, custom agents, model config, subprocess isolation |
+| [Agents](docs/guides/agents.md) | Built-in agents, custom agents, model/thinking config, subprocess isolation |
 | [TDD Guard](docs/guides/tdd-guard.md) | Enforcement mechanics, file mapping, modes, escape hatches |
 | [SDD Workflow](docs/guides/sdd-workflow.md) | Plan format, review pipeline, fix loops, escalation |
 | [Configuration](docs/guides/configuration.md) | Full `.superteam.json` reference |

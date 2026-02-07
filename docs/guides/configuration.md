@@ -142,16 +142,78 @@ Explicit mapping from impl file to test file. Takes priority over strategies.
 | `defaultModel` | string | `"claude-sonnet-4-5"` | Default model for non-scout agents |
 | `scoutModel` | string | `"claude-haiku-4-5"` | Model for scout (fast/cheap) |
 | `modelOverrides` | object | `{}` | Per-agent model overrides |
-| `thinkingOverrides` | object | `{}` | Per-agent thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Invalid values are warned and dropped. |
+| `thinkingOverrides` | object | `{}` | Per-agent thinking level overrides |
 
-> **Note:** Invalid `thinkingOverrides` values are logged as warnings during config loading and silently dropped. Only the values `off`, `minimal`, `low`, `medium`, `high`, and `xhigh` are accepted.
+#### `modelOverrides`
+
+Override the model for any agent by name. Takes highest priority in the model resolution chain.
+
+```json
+{
+  "agents": {
+    "modelOverrides": {
+      "implementer": "claude-opus-4-6",
+      "security-reviewer": "claude-opus-4-6"
+    }
+  }
+}
+```
+
+**Model resolution order:**
+1. `config.agents.modelOverrides[agentName]` — highest priority
+2. Agent frontmatter `model` field
+3. `config.agents.scoutModel` (for scout agent only)
+4. `config.agents.defaultModel` — lowest priority
+
+This is implemented by `resolveAgentModel()` in `src/dispatch.ts`.
+
+#### `thinkingOverrides`
+
+Override the thinking level for any agent by name. Thinking level controls how much "thinking" budget the model gets for reasoning.
+
+```json
+{
+  "agents": {
+    "thinkingOverrides": {
+      "implementer": "high",
+      "architect": "xhigh",
+      "scout": "low",
+      "quality-reviewer": "medium"
+    }
+  }
+}
+```
+
+**Valid thinking levels:**
+
+| Level | Description |
+|-------|-------------|
+| `"off"` | No extended thinking |
+| `"minimal"` | Minimal thinking budget |
+| `"low"` | Low thinking budget |
+| `"medium"` | Medium thinking budget |
+| `"high"` | High thinking budget |
+| `"xhigh"` | Maximum thinking budget |
+
+**Validation:** Invalid values are logged as warnings during config loading and silently dropped. Only the six values above are accepted. The validation uses the `VALID_THINKING_LEVELS` constant from `src/config.ts`.
+
+**Thinking resolution order:**
+1. `config.agents.thinkingOverrides[agentName]` — highest priority
+2. Agent frontmatter `thinking` field
+3. `undefined` (no thinking flag passed to subprocess)
+
+This is implemented by `resolveAgentThinking()` in `src/dispatch.ts`.
+
+> **Note on falsy values:** The resolution uses nullish coalescing (`??`) rather than logical OR (`||`), so `"off"` is correctly treated as a valid value rather than being skipped as falsy.
 
 ### `costs`
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `warnAtUsd` | number | `5.00` | Warning notification threshold |
-| `hardLimitUsd` | number | `20.00` | Hard limit — blocks new dispatches |
+| `hardLimitUsd` | number | `20.00` | Hard limit — blocks new dispatches, kills running subprocesses |
+
+Cost tracking is session-level. Use `/team` to see current session cost. The workflow orchestrator checks the budget before every agent dispatch and aborts if the hard limit is reached.
 
 ## Workflow Orchestrator Defaults
 
@@ -161,15 +223,18 @@ The `/workflow` orchestrator uses the following internal defaults. These are **n
 |---------|---------|-------------|
 | `maxPlanReviewCycles` | `3` | Maximum plan review → revision cycles before escalating |
 | `maxTaskReviewCycles` | `3` | Maximum fix → re-review cycles per task review |
+| `reviewMode` | chosen at runtime | `single-pass` (findings as warnings) or `iterative` (review-fix loop) — selected during configure phase |
 | `executionMode` | chosen at runtime | `auto`, `checkpoint`, or `batch` — selected during configure phase |
-| `batchSize` | `3` | Tasks per batch in batch execution mode |
+| `batchSize` | `3` | Tasks per batch in batch execution mode (configurable during configure phase) |
 | `tddMode` | `"tdd"` | Always enforced during workflow execution |
 
 The orchestrator also respects the `review` and `costs` settings from `.superteam.json` (see above). See the [Workflow Guide](workflow.md) for details on phases and execution modes.
 
 ## Config Discovery
 
-Superteam walks up from `cwd` looking for `.superteam.json`. If not found, uses built-in defaults. The config is cached after first load within a session.
+Superteam walks up from `cwd` looking for `.superteam.json`. If not found, uses built-in defaults. The config is cached after first load within a session. Pass `force: true` to `getConfig()` to reload.
+
+If the config file contains invalid JSON or cannot be read, defaults are used silently.
 
 ## Per-Project Config
 
@@ -180,3 +245,19 @@ Consider adding to `.gitignore` if you want personal overrides:
 # Uncomment to keep superteam config personal
 # .superteam.json
 ```
+
+## How `/team` Shows Config
+
+The `/team` command displays effective settings for each agent with source annotations:
+
+```
+scout [package] — Fast codebase reconnaissance
+  model: claude-haiku-4-5 (config default), thinking: low (override), tools: read, grep, find, ls, bash
+
+implementer [package] — TDD implementation
+  model: claude-opus-4-6 (override), thinking: high (override), tools: read, bash, edit, write, grep, find, ls
+```
+
+- `(override)` — value comes from `modelOverrides` or `thinkingOverrides` in config
+- `(config default)` — value comes from `defaultModel` or `scoutModel`
+- No annotation — value comes from agent frontmatter
