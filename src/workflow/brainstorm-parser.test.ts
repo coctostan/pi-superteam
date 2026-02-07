@@ -1,6 +1,6 @@
 // src/workflow/brainstorm-parser.test.ts
 import { describe, it, expect } from "vitest";
-import { parseBrainstormOutput } from "./brainstorm-parser.js";
+import { parseBrainstormOutput, sanitizeJsonNewlines } from "./brainstorm-parser.js";
 
 describe("parseBrainstormOutput", () => {
   it("parses questions response from superteam-brainstorm block", () => {
@@ -81,6 +81,66 @@ describe("parseBrainstormOutput", () => {
       type: "questions",
       questions: [{ id: "q1", text: "Q?", type: "input" }],
     })} text after`;
+    const result = parseBrainstormOutput(raw);
+    expect(result.status).toBe("ok");
+  });
+});
+
+describe("sanitizeJsonNewlines", () => {
+  it("returns unchanged string when no literal newlines in JSON strings", () => {
+    const input = '{"type":"questions","text":"hello"}';
+    expect(sanitizeJsonNewlines(input)).toBe(input);
+  });
+
+  it("replaces literal newline inside a JSON string with escaped \\n", () => {
+    const input = '{"text":"line1\nline2"}';
+    const expected = '{"text":"line1\\nline2"}';
+    expect(sanitizeJsonNewlines(input)).toBe(expected);
+  });
+
+  it("does not replace newlines outside of JSON strings", () => {
+    const input = '{\n"text": "hello"\n}';
+    expect(sanitizeJsonNewlines(input)).toBe(input);
+  });
+
+  it("handles escaped quotes correctly (does not toggle inString on escaped quote)", () => {
+    // A string containing an escaped quote: "say \"hi\"\nbye"
+    const input = '{"text":"say \\"hi\\"\\nbye"}';
+    // The \\n here is already properly escaped (it's two chars: \ and n), no literal newline
+    expect(sanitizeJsonNewlines(input)).toBe(input);
+  });
+
+  it("handles multiple literal newlines in multiple strings", () => {
+    const input = '{"a":"x\ny","b":"p\nq"}';
+    const expected = '{"a":"x\\ny","b":"p\\nq"}';
+    expect(sanitizeJsonNewlines(input)).toBe(expected);
+  });
+});
+
+describe("extractFencedBlock (via parseBrainstormOutput)", () => {
+  it("handles inner triple-backtick inside a JSON string value", () => {
+    const obj = {
+      type: "design",
+      sections: [{ id: "s1", title: "Guide", content: "Use a ```code``` block." }],
+    };
+    const raw = "```superteam-brainstorm\n" + JSON.stringify(obj) + "\n```";
+    const result = parseBrainstormOutput(raw);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.data.type).toBe("design");
+    }
+  });
+
+  it("handles fenced block with literal newlines in string values", () => {
+    const jsonStr = '{"type":"questions","questions":[{"id":"q1","text":"a\nb","type":"input"}]}';
+    const raw = "```superteam-brainstorm\n" + jsonStr + "\n```";
+    const result = parseBrainstormOutput(raw);
+    expect(result.status).toBe("ok");
+  });
+
+  it("handles opening fence with leading whitespace (up to 3 spaces)", () => {
+    const obj = { type: "questions", questions: [{ id: "q1", text: "Q?", type: "input" }] };
+    const raw = "   ```superteam-brainstorm\n" + JSON.stringify(obj) + "\n```";
     const result = parseBrainstormOutput(raw);
     expect(result.status).toBe("ok");
   });

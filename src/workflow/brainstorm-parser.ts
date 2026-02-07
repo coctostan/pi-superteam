@@ -66,13 +66,15 @@ export function parseBrainstormOutput(rawOutput: string): BrainstormParseResult 
 	// Try fenced block first
 	const fenced = extractFencedBlock(rawOutput);
 	if (fenced) {
-		return parseAndValidate(fenced, rawOutput);
+		const sanitized = sanitizeJsonNewlines(fenced);
+		return parseAndValidate(sanitized, rawOutput);
 	}
 
 	// Fallback: last brace-matched block
 	const braceMatch = extractLastBraceBlock(rawOutput);
 	if (braceMatch) {
-		return parseAndValidate(braceMatch, rawOutput);
+		const sanitized = sanitizeJsonNewlines(braceMatch);
+		return parseAndValidate(sanitized, rawOutput);
 	}
 
 	return {
@@ -83,9 +85,54 @@ export function parseBrainstormOutput(rawOutput: string): BrainstormParseResult 
 }
 
 function extractFencedBlock(text: string): string | null {
-	const regex = /```superteam-brainstorm\s*\n([\s\S]*?)```/;
-	const match = text.match(regex);
-	return match ? match[1].trim() : null;
+	const lines = text.split("\n");
+	const openPattern = /^\s{0,3}```superteam-brainstorm\s*$/;
+	const closePattern = /^\s{0,3}```\s*$/;
+
+	let startIdx = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (openPattern.test(lines[i])) {
+			startIdx = i;
+			break;
+		}
+	}
+	if (startIdx === -1) return null;
+
+	// Walk forward from the line after the opening fence, tracking quote state
+	let inString = false;
+	let escape = false;
+
+	for (let i = startIdx + 1; i < lines.length; i++) {
+		// Check for closing fence only when not inside a JSON string
+		if (!inString && closePattern.test(lines[i])) {
+			const content = lines.slice(startIdx + 1, i).join("\n");
+			return content.trim();
+		}
+
+		// Scan characters on this line to update inString/escape state
+		for (let j = 0; j < lines[i].length; j++) {
+			const ch = lines[i][j];
+			if (escape) {
+				escape = false;
+				continue;
+			}
+			if (ch === "\\") {
+				escape = true;
+				continue;
+			}
+			if (ch === '"') {
+				inString = !inString;
+			}
+		}
+
+		// The newline between this line and the next is a character in the stream.
+		// If inString is true, the newline is inside a JSON string — treat it as content.
+		// The escape flag should be cleared at line boundary (a backslash before a real newline
+		// doesn't escape the newline in the same way). But we leave inString as-is.
+		escape = false;
+	}
+
+	return null;
 }
 
 function extractLastBraceBlock(text: string): string | null {
@@ -127,6 +174,47 @@ function extractLastBraceBlock(text: string): string | null {
 		return text.slice(lastStart, lastEnd + 1);
 	}
 	return null;
+}
+
+/**
+ * Replace literal newline characters (0x0a) inside JSON string values
+ * with the two-character escape sequence \\n so JSON.parse succeeds.
+ */
+export function sanitizeJsonNewlines(jsonStr: string): string {
+	let result = "";
+	let inString = false;
+	let escape = false;
+
+	for (let i = 0; i < jsonStr.length; i++) {
+		const ch = jsonStr[i];
+
+		if (escape) {
+			escape = false;
+			result += ch;
+			continue;
+		}
+
+		if (ch === "\\") {
+			escape = true;
+			result += ch;
+			continue;
+		}
+
+		if (ch === '"') {
+			inString = !inString;
+			result += ch;
+			continue;
+		}
+
+		if (ch === "\n" && inString) {
+			result += "\\n";
+			continue;
+		}
+
+		result += ch;
+	}
+
+	return result;
 }
 
 const VALID_TYPES = ["questions", "approaches", "design"];
