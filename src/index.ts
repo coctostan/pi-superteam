@@ -51,8 +51,8 @@ import {
 	restoreTddState,
 	serializeTddState,
 } from "./workflow/tdd-guard.js";
-import { runOrchestrator } from "./workflow/orchestrator.js";
-import { loadState as loadWorkflowState, clearState as clearWorkflowState } from "./workflow/orchestrator-state.js";
+import { runOrchestrator, runWorkflowLoop } from "./workflow/orchestrator.js";
+import { loadState as loadWorkflowState, clearState as clearWorkflowState, createInitialState, saveState as saveWorkflowState } from "./workflow/orchestrator-state.js";
 
 export default function superteam(pi: ExtensionAPI) {
 	// --- team tool ---
@@ -650,6 +650,8 @@ export default function superteam(pi: ExtensionAPI) {
 		description: "Orchestrated workflow. /workflow <description> to start, /workflow to resume, /workflow status, /workflow abort",
 		async handler(args, ctx) {
 			const trimmed = args.trim();
+
+			// /workflow status
 			if (trimmed === "status") {
 				const state = loadWorkflowState(ctx.cwd);
 				if (!state) {
@@ -663,16 +665,46 @@ export default function superteam(pi: ExtensionAPI) {
 				);
 				return;
 			}
+
+			// /workflow abort
 			if (trimmed === "abort") {
 				clearWorkflowState(ctx.cwd);
 				ctx.ui.notify("Workflow aborted and state cleared.", "info");
 				return;
 			}
-			// Start new or resume — the tool handler invokes runOrchestrator
-			ctx.ui.notify(
-				"Use the workflow tool to run the orchestrator (e.g. ask the agent to start/resume the workflow).",
-				"info",
-			);
+
+			// /workflow (no args) — resume or prompt to start
+			if (!trimmed) {
+				const existingState = loadWorkflowState(ctx.cwd);
+				if (existingState) {
+					// Resume
+					await runWorkflowLoop(existingState, ctx);
+					return;
+				}
+				// No state — prompt for description
+				const description = await ctx.ui.input("Start Workflow", "Describe what you want to build");
+				if (!description) return;
+				const state = createInitialState(description);
+				saveWorkflowState(state, ctx.cwd);
+				await runWorkflowLoop(state, ctx);
+				return;
+			}
+
+			// /workflow <description> — start new
+			const existingState = loadWorkflowState(ctx.cwd);
+			if (existingState) {
+				const replace = await ctx.ui.confirm("A workflow already exists. Replace it?");
+				if (!replace) {
+					// Resume existing
+					await runWorkflowLoop(existingState, ctx);
+					return;
+				}
+				clearWorkflowState(ctx.cwd);
+			}
+
+			const state = createInitialState(trimmed);
+			saveWorkflowState(state, ctx.cwd);
+			await runWorkflowLoop(state, ctx);
 		},
 	});
 

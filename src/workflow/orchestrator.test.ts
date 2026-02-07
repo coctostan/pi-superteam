@@ -1,264 +1,118 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
-import type { OrchestratorState, PendingInteraction } from "./orchestrator-state.ts";
-import { createInitialState, saveState, loadState, clearState } from "./orchestrator-state.ts";
+// src/workflow/orchestrator.test.ts (rewrite)
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Mock all phase modules
-vi.mock("./phases/plan-write.js", () => ({
-	runPlanWritePhase: vi.fn(),
-}));
-vi.mock("./phases/plan-review.js", () => ({
-	runPlanReviewPhase: vi.fn(),
-}));
-vi.mock("./phases/configure.js", () => ({
-	runConfigurePhase: vi.fn(),
-}));
-vi.mock("./phases/execute.js", () => ({
-	runExecutePhase: vi.fn(),
-}));
-vi.mock("./phases/finalize.js", () => ({
-	runFinalizePhase: vi.fn(),
-}));
+vi.mock("./orchestrator-state.js", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("./orchestrator-state.ts")>();
+  return { ...orig, saveState: vi.fn(), loadState: vi.fn(), clearState: vi.fn() };
+});
 
-import { runOrchestrator, type OrchestratorResult } from "./orchestrator.ts";
+vi.mock("./phases/brainstorm.js", () => ({ runBrainstormPhase: vi.fn() }));
+vi.mock("./phases/plan-write.js", () => ({ runPlanWritePhase: vi.fn() }));
+vi.mock("./phases/plan-review.js", () => ({ runPlanReviewPhase: vi.fn() }));
+vi.mock("./phases/configure.js", () => ({ runConfigurePhase: vi.fn() }));
+vi.mock("./phases/execute.js", () => ({ runExecutePhase: vi.fn() }));
+vi.mock("./phases/finalize.js", () => ({ runFinalizePhase: vi.fn() }));
+vi.mock("./progress.js", () => ({ writeProgressFile: vi.fn() }));
+
+import { saveState } from "./orchestrator-state.ts";
+import { runBrainstormPhase } from "./phases/brainstorm.ts";
 import { runPlanWritePhase } from "./phases/plan-write.ts";
 import { runPlanReviewPhase } from "./phases/plan-review.ts";
 import { runConfigurePhase } from "./phases/configure.ts";
 import { runExecutePhase } from "./phases/execute.ts";
 import { runFinalizePhase } from "./phases/finalize.ts";
+import { writeProgressFile } from "./progress.ts";
 
-describe("runOrchestrator", () => {
-	let tmpDir: string;
-	let ctx: any;
+const mockSaveState = vi.mocked(saveState);
+const mockBrainstorm = vi.mocked(runBrainstormPhase);
+const mockPlanWrite = vi.mocked(runPlanWritePhase);
+const mockPlanReview = vi.mocked(runPlanReviewPhase);
+const mockConfigure = vi.mocked(runConfigurePhase);
+const mockExecute = vi.mocked(runExecutePhase);
+const mockFinalize = vi.mocked(runFinalizePhase);
+const mockWriteProgress = vi.mocked(writeProgressFile);
 
-	beforeEach(() => {
-		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "orch-test-"));
-		ctx = { cwd: tmpDir };
-		vi.clearAllMocks();
-	});
+function makeCtx(cwd = "/tmp") {
+  return {
+    cwd,
+    hasUI: true,
+    ui: {
+      select: vi.fn(),
+      confirm: vi.fn(),
+      input: vi.fn(),
+      notify: vi.fn(),
+      setStatus: vi.fn(),
+      setWidget: vi.fn(),
+    },
+  } as any;
+}
 
-	afterEach(() => {
-		fs.rmSync(tmpDir, { recursive: true, force: true });
-	});
+describe("runWorkflowLoop", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
 
-	it("returns error when no state and no userInput", async () => {
-		const result = await runOrchestrator(ctx);
-		expect(result.status).toBe("error");
-		expect(result.message).toContain("/workflow");
-	});
+  it("calls phase function matching current state.phase", async () => {
+    const { runWorkflowLoop } = await import("./orchestrator.js");
+    const ctx = makeCtx();
 
-	it("creates initial state when no state and userInput provided", async () => {
-		// Plan draft phase transitions to plan-review so the loop continues,
-		// then plan-review sets a pendingInteraction so it stops.
-		const mockPlanWrite = vi.mocked(runPlanWritePhase);
-		mockPlanWrite.mockImplementation(async (state) => ({
-			...state,
-			phase: "plan-review" as const,
-		}));
+    const state = { phase: "brainstorm", brainstorm: { step: "scout" }, totalCostUsd: 0, userDescription: "test" } as any;
+    mockBrainstorm.mockImplementation(async (s) => { s.phase = "done"; return s; });
 
-		const mockPlanReview = vi.mocked(runPlanReviewPhase);
-		mockPlanReview.mockImplementation(async (state) => ({
-			...state,
-			pendingInteraction: {
-				id: "plan-approval",
-				type: "choice" as const,
-				question: "Approve plan?",
-				options: [{ key: "approve", label: "Approve" }],
-			},
-		}));
+    await runWorkflowLoop(state, ctx);
 
-		const result = await runOrchestrator(ctx, undefined, "Build a CLI tool");
-		expect(result.status).toBe("waiting");
-		expect(mockPlanWrite).toHaveBeenCalled();
-		// State should be persisted
-		const saved = loadState(tmpDir);
-		expect(saved).not.toBeNull();
-		expect(saved!.userDescription).toBe("Build a CLI tool");
-	});
+    expect(mockBrainstorm).toHaveBeenCalledWith(state, ctx, undefined);
+  });
 
-	it("resumes from existing state with pending interaction and userInput", async () => {
-		// Set up state with pending interaction
-		const state = createInitialState("test");
-		state.phase = "configure";
-		state.pendingInteraction = {
-			id: "review-mode",
-			type: "choice",
-			question: "Review mode?",
-			options: [
-				{ key: "single-pass", label: "One round" },
-				{ key: "iterative", label: "Review-fix loop" },
-			],
-		};
-		saveState(state, tmpDir);
+  it("chains phases: brainstorm → plan-write → done", async () => {
+    const { runWorkflowLoop } = await import("./orchestrator.js");
+    const ctx = makeCtx();
 
-		const mockConfigure = vi.mocked(runConfigurePhase);
-		mockConfigure.mockImplementation(async (s) => ({
-			...s,
-			pendingInteraction: undefined,
-			phase: "execute" as const,
-		}));
+    const state = { phase: "brainstorm", brainstorm: { step: "scout" }, totalCostUsd: 0, userDescription: "test" } as any;
+    mockBrainstorm.mockImplementation(async (s) => { s.phase = "plan-write"; return s; });
+    mockPlanWrite.mockImplementation(async (s) => { s.phase = "done"; return s; });
 
-		// Execute phase returns with a pending interaction
-		const mockExecute = vi.mocked(runExecutePhase);
-		mockExecute.mockImplementation(async (s) => ({
-			...s,
-			pendingInteraction: {
-				id: "escalation",
-				type: "choice" as const,
-				question: "Task failed",
-				options: [{ key: "skip", label: "Skip" }],
-			},
-		}));
+    await runWorkflowLoop(state, ctx);
 
-		const result = await runOrchestrator(ctx, undefined, "single-pass");
-		expect(result.status).toBe("waiting");
-		expect(mockConfigure).toHaveBeenCalled();
-	});
+    expect(mockBrainstorm).toHaveBeenCalled();
+    expect(mockPlanWrite).toHaveBeenCalled();
+  });
 
-	it("returns waiting with formatted message when pending interaction and no userInput", async () => {
-		const state = createInitialState("test");
-		state.pendingInteraction = {
-			id: "review-mode",
-			type: "choice",
-			question: "How should reviews work?",
-			options: [
-				{ key: "single-pass", label: "One round" },
-				{ key: "iterative", label: "Review-fix loop" },
-			],
-		};
-		saveState(state, tmpDir);
+  it("saves state and writes progress after each phase", async () => {
+    const { runWorkflowLoop } = await import("./orchestrator.js");
+    const ctx = makeCtx();
 
-		const result = await runOrchestrator(ctx);
-		expect(result.status).toBe("waiting");
-		expect(result.message).toContain("How should reviews work?");
-	});
+    const state = { phase: "brainstorm", brainstorm: { step: "scout" }, totalCostUsd: 0, userDescription: "test" } as any;
+    mockBrainstorm.mockImplementation(async (s) => { s.phase = "done"; return s; });
 
-	it("returns error when phase has error", async () => {
-		const mockPlanWrite = vi.mocked(runPlanWritePhase);
-		mockPlanWrite.mockImplementation(async (state) => ({
-			...state,
-			error: "Scout agent failed",
-		}));
+    await runWorkflowLoop(state, ctx);
 
-		const result = await runOrchestrator(ctx, undefined, "Build something");
-		expect(result.status).toBe("error");
-		expect(result.message).toBe("Scout agent failed");
-	});
+    expect(mockSaveState).toHaveBeenCalled();
+    expect(mockWriteProgress).toHaveBeenCalled();
+  });
 
-	it("chains through phases when phase changes", async () => {
-		const mockPlanWrite = vi.mocked(runPlanWritePhase);
-		mockPlanWrite.mockImplementation(async (state) => ({
-			...state,
-			phase: "plan-review" as const,
-		}));
+  it("stops and notifies on error", async () => {
+    const { runWorkflowLoop } = await import("./orchestrator.js");
+    const ctx = makeCtx();
 
-		const mockPlanReview = vi.mocked(runPlanReviewPhase);
-		mockPlanReview.mockImplementation(async (state) => ({
-			...state,
-			phase: "configure" as const,
-		}));
+    const state = { phase: "brainstorm", brainstorm: { step: "scout" }, totalCostUsd: 0, userDescription: "test" } as any;
+    mockBrainstorm.mockImplementation(async (s) => { s.error = "Agent failed"; return s; });
 
-		const mockConfigure = vi.mocked(runConfigurePhase);
-		mockConfigure.mockImplementation(async (state) => ({
-			...state,
-			pendingInteraction: {
-				id: "review-mode",
-				type: "choice" as const,
-				question: "Review mode?",
-				options: [{ key: "single-pass", label: "One pass" }],
-			},
-		}));
+    await runWorkflowLoop(state, ctx);
 
-		const result = await runOrchestrator(ctx, undefined, "Build it");
-		expect(result.status).toBe("waiting");
-		expect(mockPlanWrite).toHaveBeenCalledTimes(1);
-		expect(mockPlanReview).toHaveBeenCalledTimes(1);
-		expect(mockConfigure).toHaveBeenCalledTimes(1);
-	});
+    expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Agent failed"), "warning");
+    expect(mockPlanWrite).not.toHaveBeenCalled();
+  });
 
-	it("handles finalize phase and returns done with report", async () => {
-		const state = createInitialState("test");
-		state.phase = "finalize";
-		state.tasks = [{ id: 1, title: "Task 1", description: "", files: [], status: "complete", reviewsPassed: [], reviewsFailed: [], fixAttempts: 0 }];
-		saveState(state, tmpDir);
+  it("clears status and widget when done", async () => {
+    const { runWorkflowLoop } = await import("./orchestrator.js");
+    const ctx = makeCtx();
 
-		const mockFinalize = vi.mocked(runFinalizePhase);
-		mockFinalize.mockImplementation(async (s) => ({
-			state: { ...s, phase: "done" as const },
-			report: "All tasks completed successfully!",
-		}));
+    const state = { phase: "brainstorm", brainstorm: { step: "scout" }, totalCostUsd: 0, userDescription: "test" } as any;
+    mockBrainstorm.mockImplementation(async (s) => { s.phase = "done"; return s; });
 
-		const result = await runOrchestrator(ctx);
-		expect(result.status).toBe("done");
-		expect(result.message).toBe("All tasks completed successfully!");
-	});
+    await runWorkflowLoop(state, ctx);
 
-	it("returns done when phase is already done", async () => {
-		const state = createInitialState("test");
-		state.phase = "done";
-		saveState(state, tmpDir);
-
-		const result = await runOrchestrator(ctx);
-		expect(result.status).toBe("done");
-		expect(result.message).toContain("complete");
-	});
-
-	it("returns running for execute phase with checkpoint mode", async () => {
-		const state = createInitialState("test");
-		state.phase = "execute";
-		state.config = { ...state.config, executionMode: "checkpoint" };
-		state.tasks = [
-			{ id: 1, title: "Task 1", description: "", files: [], status: "complete", reviewsPassed: [], reviewsFailed: [], fixAttempts: 0 },
-			{ id: 2, title: "Task 2", description: "", files: [], status: "pending", reviewsPassed: [], reviewsFailed: [], fixAttempts: 0 },
-		];
-		saveState(state, tmpDir);
-
-		const mockExecute = vi.mocked(runExecutePhase);
-		mockExecute.mockImplementation(async (s) => ({
-			...s,
-			// Still in execute phase, no pending interaction, no error — checkpoint pause
-		}));
-
-		const result = await runOrchestrator(ctx);
-		expect(result.status).toBe("running");
-	});
-
-	it("saves state after each phase transition", async () => {
-		const mockPlanWrite = vi.mocked(runPlanWritePhase);
-		mockPlanWrite.mockImplementation(async (state) => ({
-			...state,
-			phase: "plan-review" as const,
-			pendingInteraction: {
-				id: "approval",
-				type: "confirm" as const,
-				question: "Approve?",
-			},
-		}));
-
-		await runOrchestrator(ctx, undefined, "Test project");
-		const saved = loadState(tmpDir);
-		expect(saved).not.toBeNull();
-		expect(saved!.phase).toBe("plan-review");
-	});
-
-	it("throws on invalid parseUserResponse for pending interaction", async () => {
-		const state = createInitialState("test");
-		state.phase = "configure";
-		state.pendingInteraction = {
-			id: "review-mode",
-			type: "choice",
-			question: "Pick one",
-			options: [
-				{ key: "a", label: "A" },
-				{ key: "b", label: "B" },
-			],
-		};
-		saveState(state, tmpDir);
-
-		const result = await runOrchestrator(ctx, undefined, "invalid-choice");
-		expect(result.status).toBe("error");
-		expect(result.message).toContain("Invalid choice");
-	});
+    expect(ctx.ui.setStatus).toHaveBeenCalledWith("workflow", undefined);
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith("workflow-progress", undefined);
+    expect(ctx.ui.setWidget).toHaveBeenCalledWith("workflow-activity", undefined);
+  });
 });

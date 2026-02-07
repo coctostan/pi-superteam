@@ -1,3 +1,7 @@
+/**
+ * Workflow orchestrator — deterministic loop driving all phases.
+ */
+
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
 	type OrchestratorState,
@@ -8,11 +12,79 @@ import {
 	clearState,
 } from "./orchestrator-state.js";
 import { formatInteractionForAgent, parseUserResponse } from "./interaction.js";
+import { formatStatus } from "./ui.js";
+import { writeProgressFile } from "./progress.js";
+import { runBrainstormPhase } from "./phases/brainstorm.js";
 import { runPlanWritePhase } from "./phases/plan-write.js";
 import { runPlanReviewPhase } from "./phases/plan-review.js";
 import { runConfigurePhase } from "./phases/configure.js";
 import { runExecutePhase } from "./phases/execute.js";
 import { runFinalizePhase } from "./phases/finalize.js";
+
+type Ctx = ExtensionContext | { cwd: string; hasUI?: boolean; ui?: any };
+
+// --- New: runWorkflowLoop ---
+
+export async function runWorkflowLoop(
+	state: OrchestratorState,
+	ctx: Ctx,
+	signal?: AbortSignal,
+): Promise<OrchestratorState> {
+	const ui = (ctx as any).ui;
+
+	while (state.phase !== "done") {
+		ui?.setStatus?.("workflow", formatStatus(state));
+
+		switch (state.phase) {
+			case "brainstorm":
+				state = await runBrainstormPhase(state, ctx, signal);
+				break;
+			case "plan-write":
+				state = await runPlanWritePhase(state, ctx, signal);
+				break;
+			case "plan-review":
+				state = await runPlanReviewPhase(state, ctx, signal);
+				break;
+			case "configure":
+				state = await runConfigurePhase(state, ctx);
+				break;
+			case "execute":
+				state = await runExecutePhase(state, ctx, signal);
+				break;
+			case "finalize": {
+				const { state: finalState, report } = await runFinalizePhase(state, ctx, signal);
+				state = finalState;
+				state.phase = "done";
+				ui?.notify?.(report, "info");
+				break;
+			}
+			default:
+				// Unknown phase — break to avoid infinite loop
+				state.phase = "done";
+				break;
+		}
+
+		// Persist after each phase
+		saveState(state, ctx.cwd);
+		writeProgressFile(state, ctx.cwd);
+
+		// Check for error
+		if (state.error) {
+			ui?.notify?.(state.error, "warning");
+			ui?.notify?.("Use /workflow to resume.", "info");
+			break;
+		}
+	}
+
+	// Clean up UI
+	ui?.setStatus?.("workflow", undefined);
+	ui?.setWidget?.("workflow-progress", undefined);
+	ui?.setWidget?.("workflow-activity", undefined);
+
+	return state;
+}
+
+// --- Legacy: runOrchestrator (secondary tool path) ---
 
 export type OrchestratorResult = {
 	status: "running" | "waiting" | "done" | "error";
@@ -21,7 +93,7 @@ export type OrchestratorResult = {
 };
 
 export async function runOrchestrator(
-	ctx: ExtensionContext | { cwd: string },
+	ctx: Ctx,
 	signal?: AbortSignal,
 	userInput?: string,
 ): Promise<OrchestratorResult> {
@@ -66,28 +138,26 @@ export async function runOrchestrator(
 		};
 	}
 
-	// f. Phase dispatch loop
+	// f. Phase dispatch loop (legacy: single step)
 	let previousPhase: string | undefined;
 	while (true) {
 		const currentPhase = state!.phase;
 
 		switch (currentPhase) {
 			case "brainstorm":
-				// Temporary: skip brainstorm until phase is implemented (Task 7)
-				state!.phase = "plan-draft";
+				state!.phase = "plan-write";
 				break;
 			case "plan-write":
-				// Temporary: skip plan-write until phase is implemented (Task 8)
-				state!.phase = "plan-draft";
+				state = await runPlanWritePhase(state!, ctx, signal);
 				break;
 			case "plan-draft":
-				state = await runPlanWritePhase(state!, ctx as ExtensionContext, signal);
+				state = await runPlanWritePhase(state!, ctx, signal);
 				break;
 			case "plan-review":
-				state = await runPlanReviewPhase(state!, ctx as ExtensionContext, signal);
+				state = await runPlanReviewPhase(state!, ctx, signal);
 				break;
 			case "configure":
-				state = await runConfigurePhase(state!, ctx, userInput);
+				state = await runConfigurePhase(state!, ctx);
 				break;
 			case "execute":
 				state = await runExecutePhase(state!, ctx, signal, userInput);
@@ -125,7 +195,6 @@ export async function runOrchestrator(
 
 		// Phase changed — chain to next phase
 		if (state!.phase !== currentPhase) {
-			// Clear userInput after first use so subsequent phases don't get it
 			userInput = undefined;
 			previousPhase = currentPhase;
 			continue;
