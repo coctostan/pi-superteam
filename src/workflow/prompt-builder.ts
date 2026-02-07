@@ -9,6 +9,23 @@ import type { TaskExecState } from "./orchestrator-state.js";
 import type { ReviewFindings } from "../review-parser.js";
 import { formatFindings } from "../review-parser.js";
 
+// Shared review output format instruction — used by all review prompts
+const REVIEW_OUTPUT_FORMAT = [
+	``,
+	`IMPORTANT: You MUST end your response with a \`\`\`superteam-json fenced code block exactly like this:`,
+	``,
+	"```superteam-json",
+	`{`,
+	`  "passed": true,`,
+	`  "findings": [{"severity": "medium", "file": "path", "issue": "description", "suggestion": "fix"}],`,
+	`  "mustFix": [],`,
+	`  "summary": "Brief summary"`,
+	`}`,
+	"```",
+	``,
+	`Set passed to false if there are issues that must be fixed.`,
+].join("\n");
+
 // --- Scout ---
 
 export function buildScoutPrompt(cwd: string): string {
@@ -63,14 +80,14 @@ export function buildPlanReviewPrompt(planContent: string, reviewType: "architec
 		: `Check completeness, task independence, and file coverage. Can each task be done standalone? Are all files covered?`;
 
 	return [
-		`Review this plan (${reviewType} review):`,
+		`Review this implementation plan (${reviewType} review).`,
 		``,
+		`<plan>`,
 		planContent,
+		`</plan>`,
 		``,
-		`## Review instructions`,
 		instructions,
-		``,
-		`Output a \`\`\`superteam-json block with: { passed: boolean, findings: [{severity,file,issue,suggestion?}], mustFix: string[], summary: string }`,
+		REVIEW_OUTPUT_FORMAT,
 	].join("\n");
 }
 
@@ -124,8 +141,7 @@ export function buildSpecReviewPrompt(task: TaskExecState, changedFiles: string[
 		``,
 		`Read these files. Compare implementation against spec.`,
 		`Do NOT trust the implementer's self-report — verify independently.`,
-		``,
-		`Output a \`\`\`superteam-json block with: { passed: boolean, findings: [{severity,file,issue,suggestion?}], mustFix: string[], summary: string }`,
+		REVIEW_OUTPUT_FORMAT,
 	].join("\n");
 }
 
@@ -139,8 +155,7 @@ export function buildQualityReviewPrompt(task: TaskExecState, changedFiles: stri
 		changedFiles.map((f) => `- ${f}`).join("\n"),
 		``,
 		`Check: naming, DRY, error handling, test quality.`,
-		``,
-		`Output a \`\`\`superteam-json block with: { passed: boolean, findings: [{severity,file,issue,suggestion?}], mustFix: string[], summary: string }`,
+		REVIEW_OUTPUT_FORMAT,
 	].join("\n");
 }
 
@@ -160,8 +175,7 @@ export function buildFinalReviewPrompt(completedTasks: TaskExecState[], changedF
 		``,
 		`Review the full implementation across these files.`,
 		`Check cross-task integration, consistency, and completeness.`,
-		``,
-		`Output a \`\`\`superteam-json block with: { passed: boolean, findings: [{severity,file,issue,suggestion?}], mustFix: string[], summary: string }`,
+		REVIEW_OUTPUT_FORMAT,
 	].join("\n");
 }
 
