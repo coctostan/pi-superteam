@@ -34,10 +34,13 @@ export async function runPlanDraftPhase(
 	const scoutResult = await dispatchAgent(scoutAgent, buildScoutPrompt(ctx.cwd), ctx.cwd, signal);
 	const scoutOutput = getFinalOutput(scoutResult.messages);
 
-	// d. Generate planPath
+	// d. Generate planPath and ensure directory exists
 	const date = new Date().toISOString().slice(0, 10);
 	const slug = slugify(state.userDescription);
 	const planPath = `docs/plans/${date}-${slug}.md`;
+	const fullPlanPath = path.join(ctx.cwd, planPath);
+	const planDir = path.dirname(fullPlanPath);
+	fs.mkdirSync(planDir, { recursive: true });
 
 	// e. Find implementer (used as planner)
 	const implementerAgent = agents.find((a) => a.name === "implementer");
@@ -46,13 +49,26 @@ export async function runPlanDraftPhase(
 		return state;
 	}
 
-	// f. Dispatch implementer with planner prompt
-	await dispatchAgent(implementerAgent, buildPlannerPrompt(scoutOutput, state.userDescription, planPath), ctx.cwd, signal);
+	// f. Dispatch implementer with planner prompt (use absolute path so agent knows exactly where to write)
+	const plannerResult = await dispatchAgent(
+		implementerAgent,
+		buildPlannerPrompt(scoutOutput, state.userDescription, fullPlanPath),
+		ctx.cwd,
+		signal,
+	);
+
+	if (plannerResult.exitCode !== 0) {
+		const errMsg = plannerResult.errorMessage || `exit code ${plannerResult.exitCode}`;
+		state.error = `Planner agent failed: ${errMsg}`;
+		return state;
+	}
 
 	// g. Read plan file
-	const fullPlanPath = path.join(ctx.cwd, planPath);
 	if (!fs.existsSync(fullPlanPath)) {
-		state.error = "Plan file not written";
+		// Check if the agent wrote it with a different name or to an absolute path
+		const plannerOutput = getFinalOutput(plannerResult.messages);
+		const snippet = plannerOutput.slice(0, 200);
+		state.error = `Plan file not written to ${fullPlanPath}. Planner output preview: ${snippet}`;
 		return state;
 	}
 
