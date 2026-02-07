@@ -25,12 +25,23 @@ This also means the **implementation plan prompt** should not say "execute tasks
 Each session starts fresh with a focused prompt listing only its tasks plus "read these files for context." Compaction should never happen within a 3-4 task session.
 
 ### Post-task summaries in execute phase
-After each task completes (implementation + reviews pass), the orchestrator should generate a brief summary of what was done. Two purposes:
+After each task completes (implementation + reviews pass), the orchestrator should generate a brief summary of what was done. Three purposes:
 1. **User visibility** — show a concise "Task 3 complete: Added brainstorm parser with 7 test cases. Files: brainstorm-parser.ts, brainstorm-parser.test.ts. Cost: $0.38" notification after each task.
 2. **Context for next task** — the summary (not the full agent output) gets passed to the next implementer dispatch as "what was done so far." This gives the next agent situational awareness without blowing up its context.
 3. **Progress file** — append each summary to the log section of the progress.md file for a permanent audit trail.
 
 This could be: (a) a deterministic summary extracted from the dispatch result (changed files, test count, cost — no LLM needed), or (b) a lightweight summarizer agent dispatch that reads the implementer's output and produces a 2-3 sentence summary. Option (a) first, (b) if we need richer context.
+
+### Finalize phase: workflow completion report
+The finalize phase should automatically generate a comprehensive execution summary (like the manual one the implementer wrote in `2026-02-07-workflow-redesign-execution-summary.md`). Most of it is deterministic — pulled straight from state:
+- **Task table:** title + commit SHA + test count + status — from `tasks[]` and git history
+- **File inventory:** created/modified/deleted — from `computeChangedFiles()` accumulated across tasks
+- **Cost breakdown:** per-task and total — from `usage.cost` on each dispatch result
+- **Timeline:** started/finished timestamps per task — from state
+
+The only part that needs an LLM is a prose "Key Changes" section summarizing what was built at a high level. This is a good candidate for a lightweight summarizer dispatch in finalize — it reads the task titles + changed files + design doc and writes 5-6 bullet points. Low cost, high value.
+
+Output: saved to `docs/plans/YYYY-MM-DD-<slug>-summary.md` alongside the design, plan, and progress files. The full artifact chain becomes: `design.md` → `plan.md` → `progress.md` → `summary.md`.
 
 ### Planner prompt refinement
 The GPT-generated implementation plan was structurally better but lacked inline test code for complex tasks. Opus had great test code but weaker structure. After executing the merged plan, refine the planner agent's system prompt:
