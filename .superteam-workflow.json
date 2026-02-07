@@ -1,0 +1,17 @@
+{
+  "phase": "brainstorm",
+  "config": {
+    "tddMode": "tdd",
+    "maxPlanReviewCycles": 3,
+    "maxTaskReviewCycles": 3
+  },
+  "userDescription": "We need to refactor. There are some bugs and some new features to add. General:\n\nThe smoke test results are also saved at docs/plans/2026-02-07-smoke-test-results.md.    \n                                                                                                                                           \n For the fresh session — here's what you'd want it focused on:                                                                             \n - Fix the 4 bugs (critical parser bug first)                                                                                              \n - Then whatever \"next phase\" features you want to prioritize from FUTURE.md                                                               \n                                                                                                                                           \n The key docs for context are:                                                                                                             \n - docs/FUTURE.md — bugs + all planned work                                                                                                \n - docs/plans/2026-02-07-smoke-test-results.md — full test report                                                                          \n - test-workflow-smoke/docs/plans/*-plan.md — the actual plan file that triggered the parser bug\n\n 1. 🔴 CRITICAL — YAML parser dropping tasks (silent data loss)                                                                            \n 2. 🟡 HIGH — Brainstorm JSON parse failures (60% rate, $0.58 wasted)                                                                      \n 3. 🟡 MEDIUM — Status bar sub-step label stuck on \"scouting\"                                                                              \n 4. 🟢 LOW — undefined in design section display",
+  "brainstorm": {
+    "step": "scout"
+  },
+  "tasks": [],
+  "currentTaskIndex": 0,
+  "planReviewCycles": 0,
+  "totalCostUsd": 0,
+  "startedAt": 1770491721092
+}

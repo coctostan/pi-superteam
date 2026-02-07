@@ -83,11 +83,29 @@ function defaultState(): WorkflowState {
  * ```
  */
 export function parseTaskBlock(content: string): PlanTask[] | null {
-	const fenceRegex = /```superteam-tasks\s*\n([\s\S]*?)```/;
-	const match = content.match(fenceRegex);
-	if (!match) return null;
+	const lines = content.split("\n");
+	const openRe = /^\s{0,3}```superteam-tasks\s*$/;
+	const closeRe = /^\s{0,3}```\s*$/;
 
-	const block = match[1];
+	let startIdx = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (openRe.test(lines[i])) {
+			startIdx = i + 1;
+			break;
+		}
+	}
+	if (startIdx === -1) return null;
+
+	let endIdx = -1;
+	for (let i = startIdx; i < lines.length; i++) {
+		if (closeRe.test(lines[i])) {
+			endIdx = i;
+			break;
+		}
+	}
+	if (endIdx === -1) return null;
+
+	const block = lines.slice(startIdx, endIdx).join("\n");
 	return parseYamlLikeTasks(block);
 }
 
@@ -165,10 +183,11 @@ function parseYamlLikeTasks(block: string): PlanTask[] {
 	const lines = block.split("\n");
 	let current: Partial<PlanTask> | null = null;
 	let id = 1;
+	let i = 0;
 
-	for (const line of lines) {
+	while (i < lines.length) {
+		const line = lines[i];
 		const trimmed = line.trim();
-		if (!trimmed) continue;
 
 		// New task item
 		if (trimmed.startsWith("- title:")) {
@@ -176,17 +195,68 @@ function parseYamlLikeTasks(block: string): PlanTask[] {
 				tasks.push(finalizePlanTask(current, id++));
 			}
 			current = { title: trimmed.slice("- title:".length).trim() };
+			i++;
 			continue;
 		}
 
-		if (!current) continue;
+		if (!current) {
+			i++;
+			continue;
+		}
 
 		if (trimmed.startsWith("description:")) {
-			current.description = trimmed.slice("description:".length).trim();
-		} else if (trimmed.startsWith("files:")) {
+			const rawValue = trimmed.slice("description:".length).trim();
+			if (rawValue === "|") {
+				// Block scalar mode
+				// The indent of the "description:" key line
+				const keyIndent = line.length - line.trimStart().length;
+				const accumLines: string[] = [];
+				i++;
+				while (i < lines.length) {
+					const nextLine = lines[i];
+					const nextTrimmed = nextLine.trim();
+					// Stop at next task
+					if (nextTrimmed.startsWith("- title:")) break;
+					// Stop at same-or-lesser indent sibling key (e.g. "files:")
+					const nextIndent = nextLine.length - nextLine.trimStart().length;
+					if (nextTrimmed.length > 0 && nextIndent <= keyIndent && nextTrimmed.startsWith("files:")) break;
+					// Also stop at any non-empty line at same or lesser indent that looks like a YAML key
+					if (nextTrimmed.length > 0 && nextIndent <= keyIndent && /^[a-zA-Z_-]+:/.test(nextTrimmed)) break;
+					accumLines.push(nextLine);
+					i++;
+				}
+				// Dedent: find common leading whitespace
+				const nonEmptyLines = accumLines.filter(l => l.trim().length > 0);
+				let commonIndent = Infinity;
+				for (const l of nonEmptyLines) {
+					const indent = l.length - l.trimStart().length;
+					if (indent < commonIndent) commonIndent = indent;
+				}
+				if (!isFinite(commonIndent)) commonIndent = 0;
+				const dedented = accumLines.map(l => {
+					if (l.trim().length === 0) return "";
+					return l.slice(commonIndent);
+				});
+				// Trim trailing empty lines, preserve internal newlines
+				while (dedented.length > 0 && dedented[dedented.length - 1].trim() === "") {
+					dedented.pop();
+				}
+				current.description = dedented.join("\n");
+			} else {
+				current.description = rawValue;
+				i++;
+			}
+			continue;
+		}
+
+		if (trimmed.startsWith("files:")) {
 			const filesStr = trimmed.slice("files:".length).trim();
 			current.files = parseInlineArray(filesStr);
+			i++;
+			continue;
 		}
+
+		i++;
 	}
 
 	if (current?.title) {
