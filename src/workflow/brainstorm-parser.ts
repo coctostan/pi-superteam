@@ -63,21 +63,39 @@ export type BrainstormParseResult =
  * 3. If neither: error
  */
 export function parseBrainstormOutput(rawOutput: string): BrainstormParseResult {
+	let lastError: BrainstormParseResult | null = null;
+
 	// Try fenced block first
 	const fenced = extractFencedBlock(rawOutput);
 	if (fenced) {
 		const sanitized = sanitizeJsonNewlines(fenced);
-		return parseAndValidate(sanitized, rawOutput);
+		const result = parseAndValidate(sanitized, rawOutput);
+		if (result.status === "ok") return result;
+		lastError = result;
+
+		// Fallback: brace-match on the fenced region
+		const braceFromFenced = extractLastBraceBlock(fenced);
+		if (braceFromFenced) {
+			const sanitized2 = sanitizeJsonNewlines(braceFromFenced);
+			const result2 = parseAndValidate(sanitized2, rawOutput);
+			if (result2.status === "ok") return result2;
+			lastError = result2;
+		}
 	}
 
-	// Fallback: last brace-matched block
-	const braceMatch = extractLastBraceBlock(rawOutput);
-	if (braceMatch) {
-		const sanitized = sanitizeJsonNewlines(braceMatch);
-		return parseAndValidate(sanitized, rawOutput);
+	// Fallback: brace-match on full output (strip fenced block if present to avoid unmatched braces)
+	const textForBraceMatch = fenced
+		? rawOutput.replace(/```superteam-brainstorm[\s\S]*?\n```/, "")
+		: rawOutput;
+	const braceFromFull = extractLastBraceBlock(textForBraceMatch);
+	if (braceFromFull) {
+		const sanitized3 = sanitizeJsonNewlines(braceFromFull);
+		const result3 = parseAndValidate(sanitized3, rawOutput);
+		if (result3.status === "ok") return result3;
+		lastError = result3;
 	}
 
-	return {
+	return lastError ?? {
 		status: "error",
 		rawOutput,
 		parseError: "No ```superteam-brainstorm block or JSON object found in brainstormer output",
