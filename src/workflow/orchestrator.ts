@@ -72,6 +72,14 @@ export async function runOrchestrator(
 		const currentPhase = state!.phase;
 
 		switch (currentPhase) {
+			case "brainstorm":
+				// Temporary: skip brainstorm until phase is implemented (Task 7)
+				state!.phase = "plan-draft";
+				break;
+			case "plan-write":
+				// Temporary: skip plan-write until phase is implemented (Task 8)
+				state!.phase = "plan-draft";
+				break;
 			case "plan-draft":
 				state = await runPlanDraftPhase(state!, ctx as ExtensionContext, signal);
 				break;

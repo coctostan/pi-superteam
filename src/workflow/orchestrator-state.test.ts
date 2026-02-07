@@ -12,6 +12,7 @@ import {
   type TaskExecState,
   type PendingInteraction,
   type OrchestratorState,
+  type BrainstormState,
 } from "./orchestrator-state.ts";
 
 describe("orchestrator-state", () => {
@@ -26,9 +27,9 @@ describe("orchestrator-state", () => {
   });
 
   describe("createInitialState", () => {
-    it("creates state with plan-draft phase and given description", () => {
+    it("creates state with brainstorm phase and given description", () => {
       const state = createInitialState("Build a REST API");
-      expect(state.phase).toBe("plan-draft");
+      expect(state.phase).toBe("brainstorm");
       expect(state.userDescription).toBe("Build a REST API");
     });
 
@@ -59,7 +60,6 @@ describe("orchestrator-state", () => {
       const state = createInitialState("test");
       expect(state.planPath).toBeUndefined();
       expect(state.planContent).toBeUndefined();
-      expect(state.pendingInteraction).toBeUndefined();
       expect(state.error).toBeUndefined();
     });
   });
@@ -166,6 +166,8 @@ describe("orchestrator-state", () => {
   describe("type constraints", () => {
     it("OrchestratorPhase accepts valid values", () => {
       const phases: OrchestratorPhase[] = [
+        "brainstorm",
+        "plan-write",
         "plan-draft",
         "plan-review",
         "configure",
@@ -173,7 +175,7 @@ describe("orchestrator-state", () => {
         "finalize",
         "done",
       ];
-      expect(phases).toHaveLength(6);
+      expect(phases).toHaveLength(8);
     });
 
     it("TaskExecState status accepts all valid values", () => {
@@ -196,6 +198,61 @@ describe("orchestrator-state", () => {
         "input",
       ];
       expect(types).toHaveLength(3);
+    });
+  });
+
+  describe("updated state model", () => {
+    it("createInitialState starts in brainstorm phase", () => {
+      const state = createInitialState("Build auth");
+      expect(state.phase).toBe("brainstorm");
+    });
+
+    it("createInitialState has initialized brainstorm sub-state", () => {
+      const state = createInitialState("Build auth");
+      expect(state.brainstorm).toBeDefined();
+      expect(state.brainstorm.step).toBe("scout");
+    });
+
+    it("state supports designPath and designContent", () => {
+      const state = createInitialState("Build auth");
+      state.designPath = "docs/plans/2026-02-07-auth-design.md";
+      state.designContent = "# Design\n...";
+      expect(state.designPath).toBeTruthy();
+      expect(state.designContent).toBeTruthy();
+    });
+
+    it("OrchestratorPhase includes brainstorm and plan-write", () => {
+      const state = createInitialState("test");
+      state.phase = "brainstorm";
+      expect(state.phase).toBe("brainstorm");
+      state.phase = "plan-write";
+      expect(state.phase).toBe("plan-write");
+    });
+
+    it("BrainstormState has all required fields", () => {
+      const bs: BrainstormState = { step: "scout" };
+      expect(bs.step).toBe("scout");
+      bs.scoutOutput = "output";
+      bs.questions = [];
+      bs.currentQuestionIndex = 0;
+      bs.approaches = [];
+      bs.recommendation = "a1";
+      bs.chosenApproach = "a1";
+      bs.designSections = [];
+      bs.currentSectionIndex = 0;
+    });
+
+    it("state round-trips through save/load with new fields", () => {
+      const state = createInitialState("Build auth");
+      state.brainstorm.scoutOutput = "scout data";
+      state.brainstorm.step = "questions";
+      state.designPath = "docs/plans/test-design.md";
+      state.designContent = "# Design";
+      saveState(state, tmpDir);
+      const loaded = loadState(tmpDir);
+      expect(loaded).toBeDefined();
+      expect(loaded!.brainstorm.scoutOutput).toBe("scout data");
+      expect(loaded!.designPath).toBe("docs/plans/test-design.md");
     });
   });
 });
