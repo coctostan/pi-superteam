@@ -99,6 +99,7 @@ name: my-agent
 description: One-line description shown in agent list
 tools: read,grep,find,ls
 model: claude-sonnet-4-5
+thinking: high
 ---
 
 System prompt goes here. This is the full instruction set for the agent.
@@ -117,6 +118,7 @@ Be specific about:
 | `description` | Yes | One-line description |
 | `tools` | No | Comma-separated tool list. Omit for all tools. |
 | `model` | No | Model override. Falls back to config defaults. |
+| `thinking` | No | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Overridden by config `thinkingOverrides`. |
 
 ### Custom Reviewer Template
 

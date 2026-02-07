@@ -289,6 +289,11 @@ Create `.superteam.json` in your project root. All settings are optional — def
     "scoutModel": "claude-haiku-4-5",
     "modelOverrides": {
       "implementer": "claude-opus-4-6"
+    },
+    "thinkingOverrides": {
+      "implementer": "high",
+      "architect": "xhigh",
+      "scout": "low"
     }
   },
   "costs": {

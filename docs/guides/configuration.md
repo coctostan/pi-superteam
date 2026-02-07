@@ -66,7 +66,8 @@ EOF
   "agents": {
     "defaultModel": "claude-sonnet-4-5",
     "scoutModel": "claude-haiku-4-5",
-    "modelOverrides": {}
+    "modelOverrides": {},
+    "thinkingOverrides": {}
   },
 
   "costs": {
@@ -141,6 +142,9 @@ Explicit mapping from impl file to test file. Takes priority over strategies.
 | `defaultModel` | string | `"claude-sonnet-4-5"` | Default model for non-scout agents |
 | `scoutModel` | string | `"claude-haiku-4-5"` | Model for scout (fast/cheap) |
 | `modelOverrides` | object | `{}` | Per-agent model overrides |
+| `thinkingOverrides` | object | `{}` | Per-agent thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Invalid values are warned and dropped. |
+
+> **Note:** Invalid `thinkingOverrides` values are logged as warnings during config loading and silently dropped. Only the values `off`, `minimal`, `low`, `medium`, `high`, and `xhigh` are accepted.
 
 ### `costs`
 
