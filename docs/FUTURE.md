@@ -6,6 +6,24 @@ Living document tracking potential features, known weaknesses, use cases to expl
 
 ## Immediate (post-redesign)
 
+### One task per agent dispatch — lightweight context always wins
+**Lesson learned:** Running 13 TDD tasks in a single session causes context compaction, which destroys accumulated understanding. The model forgets earlier tasks, misses connections, and quality degrades.
+
+**The fix:** The orchestrator should dispatch a **fresh implementer per task**, not run all tasks in one session. This is exactly what superpowers does — and exactly what our execute phase is designed to do. Each dispatch gets:
+- The single task description with inline context (file paths, test code, spec)
+- No accumulated baggage from previous tasks
+- Fresh context window = maximum quality per task
+
+This also means the **implementation plan prompt** should not say "execute tasks 1-13 in order." It should be consumed by the orchestrator, which dispatches one agent per task. The plan is for the orchestrator, not for a human pasting into a session.
+
+**For manual execution** (before the orchestrator works): break the plan into 3-4 session chunks along natural boundaries:
+- Session 1: Tasks 1-5 (independent foundation)
+- Session 2: Tasks 6-8 (state model + brainstorm + plan-write)
+- Session 3: Tasks 9-11 (phase updates)
+- Session 4: Tasks 12-13 (integration + docs)
+
+Each session starts fresh with a focused prompt listing only its tasks plus "read these files for context." Compaction should never happen within a 3-4 task session.
+
 ### Planner prompt refinement
 The GPT-generated implementation plan was structurally better but lacked inline test code for complex tasks. Opus had great test code but weaker structure. After executing the merged plan, refine the planner agent's system prompt:
 - Require complete inline test code for complex tasks (parsers, state machines, multi-step phase logic)
@@ -91,6 +109,9 @@ If an implementer only writes tests and no implementation, the spec reviewer may
 
 ### Single-reviewer bottleneck
 Spec review and quality review run sequentially. For large tasks with many files, this adds up. Consider parallelizing the two reviews when possible (they're independent checks).
+
+### Long plans cause context death in single sessions
+A 13-task plan in one session will hit context compaction, losing earlier task context. This is fundamental — not a model limitation to work around, but a constraint to design for. The orchestrator's per-task dispatch model is the correct architecture. The implementation prompt we wrote ("execute tasks 1-13 in order") was wrong for manual execution — should have been split into 3-4 focused sessions.
 
 ### No learning from past workflows
 Each workflow starts from scratch. The orchestrator doesn't learn from past successes/failures. Future: use workflow history to pre-populate brainstorm answers, suggest proven approaches, warn about historically problematic patterns.
