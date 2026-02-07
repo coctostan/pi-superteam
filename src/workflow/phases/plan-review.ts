@@ -1,132 +1,161 @@
 /**
- * Plan review phase — dispatch reviewers, handle iterative revision cycles.
+ * Plan review phase — dispatch reviewers, use ctx.ui for approval,
+ * planner agent for revision.
  */
 
+import * as fs from "node:fs";
 import type { OrchestratorState } from "../orchestrator-state.js";
 import { saveState } from "../orchestrator-state.js";
-import { buildPlanReviewPrompt, buildPlanRevisionPrompt } from "../prompt-builder.js";
-import { confirmPlanApproval } from "../interaction.js";
+import { buildPlanReviewPrompt, buildPlanRevisionPromptFromFindings } from "../prompt-builder.js";
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput } from "../../dispatch.js";
 import { parseReviewOutput, formatFindings } from "../../review-parser.js";
-import { parseTaskBlock } from "../state.js";
+import { parseTaskBlock, parseTaskHeadings } from "../state.js";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AgentProfile, DispatchResult } from "../../dispatch.js";
 import type { ParseResult } from "../../review-parser.js";
-import * as fs from "node:fs";
+
+type Ctx = ExtensionContext | { cwd: string; hasUI?: boolean; ui?: any };
 
 export async function runPlanReviewPhase(
 	state: OrchestratorState,
-	ctx: ExtensionContext,
+	ctx: Ctx,
 	signal?: AbortSignal,
 ): Promise<OrchestratorState> {
+	const ui = (ctx as any).ui;
 	const { agents } = discoverAgents(ctx.cwd, true);
 	const architect = agents.find((a) => a.name === "architect");
 	const specReviewer = agents.find((a) => a.name === "spec-reviewer");
-	const implementer = agents.find((a) => a.name === "implementer");
+	const planner = agents.find((a) => a.name === "planner");
 
 	const availableReviewers: { agent: AgentProfile; reviewType: "architect" | "spec" }[] = [];
 	if (architect) availableReviewers.push({ agent: architect, reviewType: "architect" });
 	if (specReviewer) availableReviewers.push({ agent: specReviewer, reviewType: "spec" });
 
-	if (availableReviewers.length === 0) {
-		// No reviewers — go straight to approval
-		const taskTitles = state.tasks.map((t) => t.title);
-		state.pendingInteraction = confirmPlanApproval(state.tasks.length, taskTitles);
-		saveState(state, ctx.cwd);
-		return state;
-	}
-
 	const reviewMode = state.config.reviewMode ?? "single-pass";
 	const maxCycles = state.config.maxPlanReviewCycles ?? 3;
+	const designContent = state.designContent || "";
 
-	// Review loop (iterative mode may loop; single-pass runs once)
-	while (true) {
-		// Build prompts and dispatch reviewers
-		const reviewResults = await dispatchReviewers(
-			availableReviewers,
-			state.planContent!,
-			ctx.cwd,
-			signal,
-		);
+	// Review loop
+	if (availableReviewers.length > 0) {
+		while (true) {
+			ui?.setStatus?.("workflow", "⚡ Workflow: plan-review");
 
-		// Parse review outputs
-		const parsed: ParseResult[] = reviewResults.map((r) =>
-			parseReviewOutput(getFinalOutput(r.messages)),
-		);
+			const reviewResults = await dispatchReviewers(
+				availableReviewers, state.planContent!, designContent, ctx.cwd, signal,
+			);
 
-		const allPassed = parsed.every((p) => p.status === "pass");
+			const parsed: ParseResult[] = reviewResults.map((r) =>
+				parseReviewOutput(getFinalOutput(r.messages)),
+			);
 
-		if (allPassed) {
-			const taskTitles = state.tasks.map((t) => t.title);
-			state.pendingInteraction = confirmPlanApproval(state.tasks.length, taskTitles);
-			saveState(state, ctx.cwd);
-			return state;
-		}
+			const allPassed = parsed.every((p) => p.status === "pass");
 
-		// Some reviews failed
-		const canIterate =
-			reviewMode === "iterative" &&
-			state.planReviewCycles < maxCycles &&
-			implementer != null;
+			if (allPassed) break;
 
-		if (canIterate) {
-			// Collect findings from failed reviews
+			// Some reviews failed
 			const findings = collectFindings(parsed);
+			const canIterate = reviewMode === "iterative" && state.planReviewCycles < maxCycles && planner != null;
 
-			// Dispatch implementer to revise
-			const revisionPrompt = buildPlanRevisionPrompt(state.planContent!, findings);
-			await dispatchAgent(implementer!, revisionPrompt, ctx.cwd, signal);
+			if (canIterate) {
+				// Dispatch planner to revise
+				const revisionPrompt = buildPlanRevisionPromptFromFindings(state.planContent!, designContent, findings);
+				await dispatchAgent(planner!, revisionPrompt, ctx.cwd, signal);
 
-			// Re-read plan from disk
-			const updatedContent = fs.readFileSync(state.planPath!, "utf-8");
-			state.planContent = updatedContent;
+				// Re-read plan from disk
+				try {
+					const updatedContent = fs.readFileSync(state.planPath!, "utf-8");
+					state.planContent = updatedContent;
 
-			// Re-parse tasks
-			const parsedTasks = parseTaskBlock(updatedContent);
-			if (parsedTasks && parsedTasks.length > 0) {
-				state.tasks = parsedTasks.map((t) => ({
-					id: t.id,
-					title: t.title,
-					description: t.description,
-					files: t.files,
-					status: "pending" as const,
-					reviewsPassed: [],
-					reviewsFailed: [],
-					fixAttempts: 0,
-				}));
+					const parsedTasks = parseTaskBlock(updatedContent) || parseTaskHeadings(updatedContent);
+					if (parsedTasks && parsedTasks.length > 0) {
+						state.tasks = parsedTasks.map((t, i) => ({
+							id: t.id || i + 1,
+							title: t.title,
+							description: t.description,
+							files: t.files,
+							status: "pending" as const,
+							reviewsPassed: [],
+							reviewsFailed: [],
+							fixAttempts: 0,
+						}));
+					}
+				} catch {
+					// Plan file not readable — continue with existing
+				}
+
+				state.planReviewCycles++;
+				continue;
 			}
 
-			state.planReviewCycles++;
-			// Loop back for another review round
-			continue;
+			// Can't iterate further — show findings as warning and break to approval
+			ui?.notify?.(`Review findings:\n${findings}`, "warning");
+			break;
 		}
+	}
 
-		// Can't iterate (single-pass, max cycles reached, or no implementer)
-		const findings = collectFindings(parsed);
-		state.error = findings;
-		const taskTitles = state.tasks.map((t) => t.title);
-		state.pendingInteraction = confirmPlanApproval(state.tasks.length, taskTitles);
+	// Ask user for approval via ctx.ui.select
+	const choice = await ui?.select?.("Plan Approval", ["Approve", "Revise", "Abort"]);
+
+	if (choice === "Approve") {
+		state.phase = "configure";
 		saveState(state, ctx.cwd);
 		return state;
 	}
+
+	if (choice === "Revise") {
+		// Get feedback via editor
+		const feedback = await ui?.editor?.("Enter revision feedback");
+		if (feedback && planner) {
+			const revisionPrompt = buildPlanRevisionPromptFromFindings(state.planContent!, designContent, feedback);
+			await dispatchAgent(planner, revisionPrompt, ctx.cwd, signal);
+
+			// Re-read plan
+			try {
+				const updatedContent = fs.readFileSync(state.planPath!, "utf-8");
+				state.planContent = updatedContent;
+
+				const parsedTasks = parseTaskBlock(updatedContent) || parseTaskHeadings(updatedContent);
+				if (parsedTasks && parsedTasks.length > 0) {
+					state.tasks = parsedTasks.map((t, i) => ({
+						id: t.id || i + 1,
+						title: t.title,
+						description: t.description,
+						files: t.files,
+						status: "pending" as const,
+						reviewsPassed: [],
+						reviewsFailed: [],
+						fixAttempts: 0,
+					}));
+				}
+			} catch { /* ignore */ }
+		}
+
+		// Re-run reviews (recursive)
+		return runPlanReviewPhase(state, ctx, signal);
+	}
+
+	// Abort or cancel
+	state.error = "Workflow aborted by user at plan review";
+	saveState(state, ctx.cwd);
+	return state;
 }
 
 async function dispatchReviewers(
 	reviewers: { agent: AgentProfile; reviewType: "architect" | "spec" }[],
 	planContent: string,
+	designContent: string,
 	cwd: string,
 	signal?: AbortSignal,
 ): Promise<DispatchResult[]> {
 	if (reviewers.length === 1) {
 		const { agent, reviewType } = reviewers[0];
-		const prompt = buildPlanReviewPrompt(planContent, reviewType);
+		const prompt = buildPlanReviewPrompt(planContent, reviewType, designContent);
 		const result = await dispatchAgent(agent, prompt, cwd, signal);
 		return [result];
 	}
 
-	// Multiple reviewers — dispatch in parallel
 	const agents = reviewers.map((r) => r.agent);
-	const tasks = reviewers.map((r) => buildPlanReviewPrompt(planContent, r.reviewType));
+	const tasks = reviewers.map((r) => buildPlanReviewPrompt(planContent, r.reviewType, designContent));
 	return dispatchParallel(agents, tasks, cwd, signal);
 }
 

@@ -74,21 +74,27 @@ export function buildPlanRevisionPrompt(planContent: string, findings: string): 
 
 // --- Plan review ---
 
-export function buildPlanReviewPrompt(planContent: string, reviewType: "architect" | "spec"): string {
+export function buildPlanReviewPrompt(planContent: string, reviewType: "architect" | "spec", designContent?: string): string {
 	const instructions = reviewType === "architect"
 		? `Check design, modularity, and task ordering. Are dependencies correct? Is the architecture sound?`
 		: `Check completeness, task independence, and file coverage. Can each task be done standalone? Are all files covered?`;
 
-	return [
+	const parts = [
 		`Review this implementation plan (${reviewType} review).`,
 		``,
 		`<plan>`,
 		planContent,
 		`</plan>`,
 		``,
-		instructions,
-		REVIEW_OUTPUT_FORMAT,
-	].join("\n");
+	];
+
+	if (designContent) {
+		parts.push(`<design>`, designContent, `</design>`, ``);
+		parts.push(`Validate the plan against the approved design above.`, ``);
+	}
+
+	parts.push(instructions, REVIEW_OUTPUT_FORMAT);
+	return parts.join("\n");
 }
 
 // --- Implementation ---
