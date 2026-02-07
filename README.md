@@ -72,29 +72,30 @@ Now try writing code without a test:
 
 The AI learns fast. After one block, it writes tests first on its own.
 
-### Run an automated SDD workflow
+### Run an orchestrated workflow
 
-Create a plan:
-```markdown
-# Feature: Rate Limiting
-
-\`\`\`superteam-tasks
-- title: Token bucket implementation
-  description: Implement token bucket rate limiter with configurable rate and burst
-  files: [src/rate-limiter.ts]
-- title: Middleware integration
-  description: Express middleware that applies rate limiting per IP
-  files: [src/middleware/rate-limit.ts]
-\`\`\`
+```
+/workflow Add rate limiting with token bucket algorithm
 ```
 
-Then:
+The orchestrator automatically:
+1. **Scouts** your codebase to understand the project
+2. **Drafts a plan** with concrete tasks
+3. **Reviews the plan** (architect + spec reviewer)
+4. **Asks you** to approve the plan and pick an execution mode
+5. **Executes each task** through implement → review → fix loops (with TDD enforced)
+6. **Finalizes** with a cross-task review and summary report
+
+State persists to `.superteam-workflow.json` — resume anytime with `/workflow`.
+
+### Run individual tasks with SDD
+
+For more control, use `/sdd` to run individual tasks through the review pipeline:
+
 ```
 /sdd load plan.md
 /sdd run
 ```
-
-Superteam dispatches the implementer (with TDD enforcement), runs spec + quality reviews, fixes issues automatically, and advances to the next task.
 
 ---
 
@@ -177,6 +178,29 @@ Reviews return structured JSON — no LLM needed to interpret results:
 ```
 ````
 
+### 🎯 Workflow Orchestrator
+
+A deterministic state machine that drives the full development pipeline — agents do creative work, the orchestrator controls flow.
+
+```
+/workflow <description>    Start a new orchestrated workflow
+/workflow                  Resume an in-progress workflow
+/workflow status           Show current phase, task progress, cost
+/workflow abort            Abort and clear state
+```
+
+**Five phases:**
+
+| Phase | What happens |
+|-------|-------------|
+| **plan-draft** | Scout explores codebase, planner writes a task plan |
+| **plan-review** | Architect + spec reviewer validate the plan |
+| **configure** | You pick execution mode (auto / checkpoint / batch) |
+| **execute** | Implement → review → fix loop per task, with TDD enforced |
+| **finalize** | Final cross-task review + summary report |
+
+The workflow persists to `.superteam-workflow.json` and resumes from where it left off. See the [Workflow Guide](docs/guides/workflow.md) for details.
+
 ### 📏 Context-Aware Rules
 
 TTSR-inspired rule injection. When the AI's output matches a trigger pattern, corrective guidance is injected into the next turn's context.
@@ -257,7 +281,11 @@ See the [Agent Guide](docs/guides/agents.md) for details.
 | `/team` | List agents and session cost |
 | `/tdd [off\|tdd\|atdd]` | Toggle TDD enforcement mode |
 | `/tdd allow-bash-write once <reason>` | One-time bash write escape hatch |
-| `/sdd load <file>` | Load a plan file |
+| `/workflow <description>` | Start a new orchestrated workflow |
+| `/workflow` | Resume an in-progress workflow |
+| `/workflow status` | Show phase, task progress, and cost |
+| `/workflow abort` | Abort workflow and clear state |
+| `/sdd load <file>` | Load a plan file (lower-level) |
 | `/sdd run` | Run SDD for current task |
 | `/sdd status` | Show task progress |
 | `/sdd next` | Advance to next task |
@@ -343,6 +371,7 @@ pi-superteam/
 
 | Guide | Description |
 |-------|-------------|
+| [Workflow](docs/guides/workflow.md) | Orchestrator phases, interaction points, execution modes, resuming |
 | [Agents](docs/guides/agents.md) | Built-in agents, custom agents, model config, subprocess isolation |
 | [TDD Guard](docs/guides/tdd-guard.md) | Enforcement mechanics, file mapping, modes, escape hatches |
 | [SDD Workflow](docs/guides/sdd-workflow.md) | Plan format, review pipeline, fix loops, escalation |

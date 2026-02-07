@@ -153,6 +153,20 @@ Explicit mapping from impl file to test file. Takes priority over strategies.
 | `warnAtUsd` | number | `5.00` | Warning notification threshold |
 | `hardLimitUsd` | number | `20.00` | Hard limit — blocks new dispatches |
 
+## Workflow Orchestrator Defaults
+
+The `/workflow` orchestrator uses the following internal defaults. These are **not configurable** via `.superteam.json` — they are set during the workflow's configure phase or use built-in defaults.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `maxPlanReviewCycles` | `3` | Maximum plan review → revision cycles before escalating |
+| `maxTaskReviewCycles` | `3` | Maximum fix → re-review cycles per task review |
+| `executionMode` | chosen at runtime | `auto`, `checkpoint`, or `batch` — selected during configure phase |
+| `batchSize` | `3` | Tasks per batch in batch execution mode |
+| `tddMode` | `"tdd"` | Always enforced during workflow execution |
+
+The orchestrator also respects the `review` and `costs` settings from `.superteam.json` (see above). See the [Workflow Guide](workflow.md) for details on phases and execution modes.
+
 ## Config Discovery
 
 Superteam walks up from `cwd` looking for `.superteam.json`. If not found, uses built-in defaults. The config is cached after first load within a session.
