@@ -10,8 +10,12 @@ import {
 	buildQualityReviewPrompt,
 	buildFinalReviewPrompt,
 	extractPlanContext,
+	buildBrainstormQuestionsPrompt,
+	buildBrainstormApproachesPrompt,
+	buildBrainstormDesignPrompt,
+	buildBrainstormSectionRevisionPrompt,
 } from "./prompt-builder.ts";
-import type { TaskExecState } from "./orchestrator-state.ts";
+import type { TaskExecState, BrainstormQuestion, BrainstormApproach, DesignSection } from "./orchestrator-state.ts";
 import type { ReviewFindings } from "../review-parser.ts";
 
 // --- Helpers ---
@@ -327,5 +331,55 @@ Modular design
 		const plan = `  # Goal  \n\n\`\`\`superteam-tasks\n...\n\`\`\``;
 		const result = extractPlanContext(plan);
 		expect(result).toBe("# Goal");
+	});
+});
+
+// --- Brainstorm prompts: literal newline warning ---
+
+const NEWLINE_WARNING = "never use literal newlines inside string values";
+
+describe("buildBrainstormQuestionsPrompt", () => {
+	it("includes literal newline warning", () => {
+		const result = buildBrainstormQuestionsPrompt("scout output", "build a widget");
+		expect(result.toLowerCase()).toContain(NEWLINE_WARNING);
+	});
+});
+
+describe("buildBrainstormApproachesPrompt", () => {
+	it("includes literal newline warning", () => {
+		const questions: BrainstormQuestion[] = [
+			{ id: "q1", text: "What framework?", type: "choice", options: ["React", "Vue"], answer: "React" },
+		];
+		const result = buildBrainstormApproachesPrompt("scout output", "build a widget", questions);
+		expect(result.toLowerCase()).toContain(NEWLINE_WARNING);
+	});
+});
+
+describe("buildBrainstormDesignPrompt", () => {
+	it("includes literal newline warning", () => {
+		const questions: BrainstormQuestion[] = [
+			{ id: "q1", text: "What framework?", type: "choice", options: ["React"], answer: "React" },
+		];
+		const approach: BrainstormApproach = {
+			id: "a1",
+			title: "Component-based",
+			summary: "Use components",
+			tradeoffs: "More files",
+			taskEstimate: 3,
+		};
+		const result = buildBrainstormDesignPrompt("scout output", "build a widget", questions, approach);
+		expect(result.toLowerCase()).toContain(NEWLINE_WARNING);
+	});
+});
+
+describe("buildBrainstormSectionRevisionPrompt", () => {
+	it("includes literal newline warning", () => {
+		const section: DesignSection = {
+			id: "s1",
+			title: "Architecture",
+			content: "The system uses a modular design.",
+		};
+		const result = buildBrainstormSectionRevisionPrompt(section, "Add more detail", "Some context");
+		expect(result.toLowerCase()).toContain(NEWLINE_WARNING);
 	});
 });

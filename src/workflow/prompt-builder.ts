@@ -204,6 +204,8 @@ export function buildBrainstormQuestionsPrompt(scoutOutput: string, userDescript
 		`Use "input" type for open-ended questions.`,
 		``,
 		`Return a \`\`\`superteam-brainstorm block with type "questions".`,
+		``,
+		`IMPORTANT: In your JSON output, never use literal newlines inside string values. Use \\n escape sequences instead.`,
 	].join("\n");
 }
 
@@ -230,6 +232,8 @@ export function buildBrainstormApproachesPrompt(
 		`Provide a recommendation with reasoning.`,
 		``,
 		`Return a \`\`\`superteam-brainstorm block with type "approaches".`,
+		``,
+		`IMPORTANT: In your JSON output, never use literal newlines inside string values. Use \\n escape sequences instead.`,
 	].join("\n");
 }
 
@@ -257,6 +261,8 @@ export function buildBrainstormDesignPrompt(
 		`Each section: 200-300 words, specific file paths and function names.`,
 		``,
 		`Return a \`\`\`superteam-brainstorm block with type "design".`,
+		``,
+		`IMPORTANT: In your JSON output, never use literal newlines inside string values. Use \\n escape sequences instead.`,
 	].join("\n");
 }
 
@@ -280,6 +286,8 @@ export function buildBrainstormSectionRevisionPrompt(
 		`## Instructions`,
 		`Revise this section based on the feedback. Keep the same id and title.`,
 		`Return a \`\`\`superteam-brainstorm block with type "design" containing the revised section.`,
+		``,
+		`IMPORTANT: In your JSON output, never use literal newlines inside string values. Use \\n escape sequences instead.`,
 	].join("\n");
 }
 
