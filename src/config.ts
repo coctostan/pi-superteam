@@ -10,6 +10,12 @@ import * as path from "node:path";
 
 // --- Types ---
 
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export const VALID_THINKING_LEVELS: readonly ThinkingLevel[] = [
+	"off", "minimal", "low", "medium", "high", "xhigh",
+] as const;
+
 export interface MappingStrategy {
 	type: "suffix" | "directory" | "mirror";
 	implSuffix?: string;
@@ -36,6 +42,7 @@ export interface AgentConfig {
 	defaultModel: string;
 	scoutModel: string;
 	modelOverrides: Record<string, string>;
+	thinkingOverrides: Record<string, ThinkingLevel>;
 }
 
 export interface CostConfig {
@@ -84,6 +91,7 @@ const DEFAULT_CONFIG: SuperteamConfig = {
 		defaultModel: "claude-sonnet-4-5",
 		scoutModel: "claude-haiku-4-5",
 		modelOverrides: {},
+		thinkingOverrides: {},
 	},
 	costs: {
 		warnAtUsd: 5.0,
@@ -146,6 +154,23 @@ export function getConfig(cwd: string, force = false): SuperteamConfig {
 		const raw = fs.readFileSync(configPath, "utf-8");
 		const parsed = JSON.parse(raw);
 		cachedConfig = deepMerge(DEFAULT_CONFIG, parsed) as SuperteamConfig;
+
+		// Validate thinkingOverrides: drop invalid values with a warning
+		if (cachedConfig.agents.thinkingOverrides) {
+			const validOverrides: Record<string, ThinkingLevel> = {};
+			for (const [agent, level] of Object.entries(cachedConfig.agents.thinkingOverrides)) {
+				if (VALID_THINKING_LEVELS.includes(level as ThinkingLevel)) {
+					validOverrides[agent] = level as ThinkingLevel;
+				} else {
+					console.warn(
+						`[superteam] Invalid thinking level "${level}" for agent "${agent}" in config. ` +
+						`Valid levels: ${VALID_THINKING_LEVELS.join(", ")}. Ignoring override.`
+					);
+				}
+			}
+			cachedConfig.agents.thinkingOverrides = validOverrides;
+		}
+
 		return cachedConfig;
 	} catch {
 		// Invalid JSON or read error — use defaults
