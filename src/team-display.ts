@@ -2,9 +2,9 @@
  * Formatting helpers for /team command display.
  */
 
-import type { AgentProfile } from "./dispatch.ts";
-import type { SuperteamConfig } from "./config.ts";
-import { resolveAgentModel, resolveAgentThinking } from "./dispatch.ts";
+import type { AgentProfile } from "./dispatch.js";
+import type { SuperteamConfig } from "./config.js";
+import { resolveAgentModel, resolveAgentThinking } from "./dispatch.js";
 
 /**
  * Format a single agent line for /team display.

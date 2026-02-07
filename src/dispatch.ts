@@ -254,7 +254,7 @@ export function resolveAgentModel(agent: AgentProfile, config: SuperteamConfig):
  * config.agents.thinkingOverrides[name] > agent.thinking > undefined
  */
 export function resolveAgentThinking(agent: AgentProfile, config: SuperteamConfig): ThinkingLevel | undefined {
-	return config.agents.thinkingOverrides[agent.name] || agent.thinking || undefined;
+	return config.agents.thinkingOverrides[agent.name] ?? agent.thinking ?? undefined;
 }
 
 function buildSubprocessArgs(agent: AgentProfile, cwd: string): string[] {
