@@ -1,5 +1,6 @@
 import type { PendingInteraction } from "./orchestrator-state.js";
 
+/** @deprecated Will be removed when configure phase is rewritten (Task 10) */
 export function askReviewMode(): PendingInteraction {
   return {
     id: "review-mode",
@@ -20,6 +21,7 @@ export function askReviewMode(): PendingInteraction {
   };
 }
 
+/** @deprecated Will be removed when configure phase is rewritten (Task 10) */
 export function askExecutionMode(): PendingInteraction {
   return {
     id: "execution-mode",
@@ -45,6 +47,7 @@ export function askExecutionMode(): PendingInteraction {
   };
 }
 
+/** @deprecated Will be removed when configure phase is rewritten (Task 10) */
 export function askBatchSize(): PendingInteraction {
   return {
     id: "batch-size",
@@ -54,6 +57,7 @@ export function askBatchSize(): PendingInteraction {
   };
 }
 
+/** @deprecated Will be removed when plan-review phase is rewritten (Task 9) */
 export function confirmPlanApproval(
   taskCount: number,
   taskTitles: string[]
@@ -78,6 +82,7 @@ export function confirmPlanApproval(
   };
 }
 
+/** @deprecated Will be removed when execute phase is rewritten (Task 11) */
 export function confirmTaskEscalation(
   taskTitle: string,
   reason: string
