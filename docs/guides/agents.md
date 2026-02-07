@@ -36,7 +36,36 @@ The implementer subprocess loads:
 - `-e <packageDir>/src/index.ts` — TDD guard enforces test-first
 - `--skill <packageDir>/skills/test-driven-development/SKILL.md` — teaches RED→GREEN→REFACTOR
 
-The implementer is also used as the **planner** in the workflow orchestrator's plan-draft phase.
+### brainstormer
+
+**Purpose:** Generate structured brainstorm outputs — clarifying questions, implementation approaches, and design sections. Read-only agent that returns structured JSON in `superteam-brainstorm` blocks.
+
+| Property | Value |
+|----------|-------|
+| Default Model | `claude-sonnet-4-5` (via `defaultModel`) |
+| Tools | `read, find, grep, ls` (read-only — no write, edit, or bash) |
+| Thinking | None by default |
+| Output | Structured `superteam-brainstorm` JSON |
+| Best for | Interactive design refinement in the brainstorm phase |
+
+The brainstormer supports three response types:
+- **questions** — 3-7 clarifying questions (choice or open-ended)
+- **approaches** — 2-3 implementation approaches with trade-offs and recommendation
+- **design** — Detailed design sections (architecture, data flow, error handling, etc.)
+
+### planner
+
+**Purpose:** Write detailed TDD implementation plans. Can read and write files but has no bash or edit access — focused purely on planning.
+
+| Property | Value |
+|----------|-------|
+| Default Model | `claude-sonnet-4-5` (via `defaultModel`) |
+| Tools | `read, write, find, grep, ls` (no bash or edit) |
+| Thinking | None by default |
+| Output | Plan file with `superteam-tasks` YAML block |
+| Best for | Writing implementation plans from approved designs |
+
+The planner writes plans to a specified file path and includes a `superteam-tasks` block for machine parsing. Each task includes title, description, files, and TDD instructions.
 
 ### spec-reviewer
 

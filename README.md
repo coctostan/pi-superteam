@@ -52,11 +52,11 @@ The fastest way to get going — the orchestrator handles everything end-to-end:
 ```
 
 The orchestrator automatically:
-1. **Scouts** your codebase to understand the project
-2. **Drafts a plan** with concrete tasks
-3. **Reviews the plan** (architect + spec reviewer)
-4. **Asks you** to approve the plan and configure execution
-5. **Executes each task** through implement → review → fix loops (with TDD enforced)
+1. **Brainstorms** — scouts your codebase, asks clarifying questions, proposes approaches, writes a design doc
+2. **Writes a plan** — dedicated planner agent creates a detailed TDD plan from the approved design
+3. **Reviews the plan** (architect + spec reviewer, with planner revisions)
+4. **Configures** execution mode and review settings via interactive dialogs
+5. **Executes each task** through implement → review → fix loops (with TDD enforced and live activity streaming)
 6. **Finalizes** with a cross-task review and summary report
 
 State persists to `.superteam-workflow.json` — resume anytime with `/workflow`.
@@ -138,14 +138,15 @@ A deterministic state machine that drives the full development pipeline — agen
 /workflow abort            Abort and clear state
 ```
 
-**Five phases:**
+**Seven phases (brainstorm pipeline):**
 
 | Phase | What happens |
 |-------|-------------|
-| **plan-draft** | Scout explores codebase, implementer (as planner) writes a task plan |
-| **plan-review** | Architect + spec reviewer validate the plan (iterative revision supported) |
-| **configure** | You pick review mode, execution mode, and batch size |
-| **execute** | Implement → spec review → quality review → optional reviews per task, with fix loops |
+| **brainstorm** | Scout explores codebase → brainstormer generates questions → you answer → approaches proposed → design sections written and approved |
+| **plan-write** | Planner agent writes a detailed TDD plan from the approved design |
+| **plan-review** | Architect + spec reviewer validate the plan against the design (planner revises if needed) |
+| **configure** | Interactive dialogs for execution mode, review mode, and batch size |
+| **execute** | Implement → spec review → quality review → optional reviews per task, with fix loops and live activity streaming |
 | **finalize** | Final cross-task quality review + summary report |
 
 The workflow persists to `.superteam-workflow.json` and resumes from where it left off. See the [Workflow Guide](docs/guides/workflow.md) for details.
