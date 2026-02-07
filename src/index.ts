@@ -668,11 +668,25 @@ export default function superteam(pi: ExtensionAPI) {
 				ctx.ui.notify("Workflow aborted and state cleared.", "info");
 				return;
 			}
-			// Start new or resume — the tool handler invokes runOrchestrator
-			ctx.ui.notify(
-				"Use the workflow tool to run the orchestrator (e.g. ask the agent to start/resume the workflow).",
-				"info",
-			);
+			if (trimmed === "") {
+				// No args — check for active workflow to resume
+				const state = loadWorkflowState(ctx.cwd);
+				if (state) {
+					ctx.ui.notify(`Resuming workflow (phase: ${state.phase})...`, "info");
+					const result = await runOrchestrator(ctx, undefined, undefined);
+					ctx.ui.notify(result.message, result.status === "error" ? "warning" : "info");
+				} else {
+					ctx.ui.notify(
+						"No active workflow.\n\nUsage:\n  /workflow <description>  — Start a new workflow\n  /workflow status         — Show progress\n  /workflow abort          — Cancel and clear state",
+						"info",
+					);
+				}
+				return;
+			}
+			// Start new workflow with description
+			ctx.ui.notify(`Starting workflow: ${trimmed}`, "info");
+			const result = await runOrchestrator(ctx, undefined, trimmed);
+			ctx.ui.notify(result.message, result.status === "error" ? "warning" : "info");
 		},
 	});
 
