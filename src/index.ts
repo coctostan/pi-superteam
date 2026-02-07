@@ -9,6 +9,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { getConfig, getPackageDir } from "./config.js";
+import { formatAgentLine } from "./team-display.js";
 import {
 	type AgentProfile,
 	type DispatchDetails,
@@ -508,14 +509,10 @@ export default function superteam(pi: ExtensionAPI) {
 				return;
 			}
 
-			const lines = agents.map((a) => {
-				const model = a.model || "(default)";
-				const tools = a.tools?.join(", ") || "(all)";
-				return `${a.name} [${a.source}] — ${a.description}\n  model: ${model}, tools: ${tools}`;
-			});
+			const config = getConfig(ctx.cwd);
+			const lines = agents.map((a) => formatAgentLine(a, config));
 
 			const cost = getSessionCost();
-			const config = getConfig(ctx.cwd);
 			const costLine = `\nSession cost: $${cost.toFixed(4)} / $${config.costs.hardLimitUsd.toFixed(2)} limit`;
 
 			ctx.ui.notify(`Available agents (${agents.length}):\n\n${lines.join("\n\n")}${costLine}`, "info");
