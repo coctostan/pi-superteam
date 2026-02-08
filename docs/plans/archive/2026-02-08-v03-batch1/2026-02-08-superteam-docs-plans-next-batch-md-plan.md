@@ -7,11 +7,11 @@ This plan implements 15 improvement items from `docs/plans/next-batch.md`, organ
 - **Batch A** (Tasks 1–5): Parser extraction & prompt cleanup
 - **Batch B** (Tasks 6–9): Dispatch & context injection
 - **Batch C** (Tasks 10–15): Execution pipeline enhancements
-- **Batch D** (Tasks 16–20): Workflow UX improvements
+- **Batch D** (Tasks 16–18): Workflow UX improvements
 
-Batches A and B are independent and can run in parallel. Batch C depends on Batch A. Batch D depends on Batch A completing.
+Batches A and B are independent and can run in parallel. Batch C depends on Batch A. Batch D is independent of other batches.
 
-Total: **20 implementation tasks**, each 2–5 minutes.
+Total: **18 implementation tasks**, each 2–5 minutes.
 
 ---
 
@@ -78,7 +78,7 @@ describe("extractFencedBlock", () => {
 });
 ```
 
-**Implementation (`src/parse-utils.ts`):** Export `extractFencedBlock(text: string, language: string): string | null` using the quote-aware scanning algorithm from `brainstorm-parser.ts`, generalized to accept a `language` parameter instead of hardcoding `superteam-brainstorm`.
+**Implementation (`src/parse-utils.ts`):** Export `extractFencedBlock(text: string, language: string): string | null` using the quote-aware scanning algorithm from `brainstorm-parser.ts`, generalized to accept a `language` parameter. Build the `openPattern` regex dynamically: `` new RegExp(`^\\s{0,3}\`\`\`${language}\\s*$`) ``.
 
 **Verification:** `npx vitest run src/parse-utils.test.ts`
 
@@ -157,7 +157,7 @@ describe("sanitizeJsonNewlines", () => {
 
 ### Task 3: Wire `brainstorm-parser.ts` to use `parse-utils.ts`
 
-**Modify** `brainstorm-parser.ts` to import `extractFencedBlock`, `extractLastBraceBlock`, and `sanitizeJsonNewlines` from `../parse-utils.js`. Delete the local copies. The brainstorm parser passes `'superteam-brainstorm'` as the language parameter to `extractFencedBlock`.
+**Modify** `brainstorm-parser.ts` to import `extractFencedBlock`, `extractLastBraceBlock`, and `sanitizeJsonNewlines` from `../parse-utils.js`. Delete the local copies of all three functions. The brainstorm parser passes `'superteam-brainstorm'` as the language parameter to `extractFencedBlock`.
 
 **Files:** `src/workflow/brainstorm-parser.ts`
 
@@ -170,11 +170,11 @@ The existing `brainstorm-parser.test.ts` and `brainstorm-parser.acceptance.test.
 
 ### Task 4: Wire `review-parser.ts` to use `parse-utils.ts`
 
-**Modify** `review-parser.ts` to import `extractFencedBlock`, `extractLastBraceBlock`, and `sanitizeJsonNewlines` from `./parse-utils.js`. Replace the naive regex `extractFencedBlock` and the local `extractLastBraceBlock`. Add `sanitizeJsonNewlines` as a pre-parse step in `parseAndValidate`. Delete the local copies.
+**Modify** `review-parser.ts` to import `extractFencedBlock`, `extractLastBraceBlock`, and `sanitizeJsonNewlines` from `./parse-utils.js`. Replace the naive regex `extractFencedBlock` and the local `extractLastBraceBlock` with imports. Add `sanitizeJsonNewlines(jsonStr)` as a pre-parse step before `JSON.parse` in `parseAndValidate`. Delete the local copies.
 
 **Files:** `src/review-parser.ts`, `src/review-parser.test.ts`
 
-**Test code (create `src/review-parser.test.ts`):**
+**Test code (create `src/review-parser.test.ts` — does not exist yet):**
 ```typescript
 import { describe, it, expect } from "vitest";
 import { parseReviewOutput } from "./review-parser.js";
@@ -213,7 +213,11 @@ describe("parseReviewOutput with sanitizeJsonNewlines (hardened)", () => {
 });
 ```
 
-**Implementation:** Replace the local `extractFencedBlock` (regex-based) and `extractLastBraceBlock` with imports from `./parse-utils.js`. Add `sanitizeJsonNewlines(jsonStr)` call before `JSON.parse` in `parseAndValidate`.
+**Implementation:** Replace the local `extractFencedBlock` (regex-based) and `extractLastBraceBlock` with imports from `./parse-utils.js`. In `parseAndValidate`, wrap `jsonStr` with `sanitizeJsonNewlines` before `JSON.parse`:
+```typescript
+const sanitized = sanitizeJsonNewlines(jsonStr);
+parsed = JSON.parse(sanitized);
+```
 
 **Verification:** `npx vitest run src/review-parser.test.ts`
 
@@ -227,7 +231,7 @@ describe("parseReviewOutput with sanitizeJsonNewlines (hardened)", () => {
 
 **Test code (add to `src/workflow/prompt-builder.test.ts`):**
 
-Note: This project uses ESM (`"type": "module"`), so `__dirname` and `require()` are unavailable. Use `import.meta.dirname` or static imports instead.
+Note: This project uses ESM (`"type": "module"`) with `engines: ">=20.0.0"`. `import.meta.dirname` is only available in Node ≥ 21.2. Use `path.dirname(new URL(import.meta.url).pathname)` for ESM-safe path resolution (matching the existing pattern in `src/config.ts`). Do NOT use `__dirname` or `require()`.
 
 ```typescript
 import * as fs from "node:fs";
@@ -258,8 +262,8 @@ describe("REVIEW_OUTPUT_FORMAT removal", () => {
 
   it("all 5 reviewer agents contain superteam-json format in their .md", () => {
     const agentFiles = ["architect", "spec-reviewer", "quality-reviewer", "security-reviewer", "performance-reviewer"];
-    // Resolve agents/ dir relative to this test file (src/workflow/ → ../../agents/)
-    const agentsDir = path.resolve(import.meta.dirname, "../../agents");
+    const thisDir = path.dirname(new URL(import.meta.url).pathname);
+    const agentsDir = path.resolve(thisDir, "../../agents");
     for (const name of agentFiles) {
       const content = fs.readFileSync(path.join(agentsDir, name + ".md"), "utf-8");
       expect(content).toContain("```superteam-json");
@@ -268,12 +272,12 @@ describe("REVIEW_OUTPUT_FORMAT removal", () => {
 });
 ```
 
-**Implementation:** Delete the `REVIEW_OUTPUT_FORMAT` constant from `prompt-builder.ts`. Remove the `REVIEW_OUTPUT_FORMAT` reference from `buildPlanReviewPrompt`, `buildSpecReviewPrompt`, `buildQualityReviewPrompt`, and `buildFinalReviewPrompt`. Update existing tests that assert `superteam-json` IS present in prompts — the following existing tests need updating:
-- `buildPlanReviewPrompt` → "mandates superteam-json output" → change to assert NOT present, OR remove entirely since the agent `.md` already has it
-- `buildSpecReviewPrompt` → "mandates superteam-json output" → same
-- `buildQualityReviewPrompt` → "mandates superteam-json output" → same
-- `buildFinalReviewPrompt` → "mandates superteam-json output" → same
-- `buildPlanReviewPrompt` → "mentions passed/findings/mustFix/summary fields" → remove or update
+**Implementation:** Delete the `REVIEW_OUTPUT_FORMAT` constant from `prompt-builder.ts`. Remove the `REVIEW_OUTPUT_FORMAT` reference from `buildPlanReviewPrompt`, `buildSpecReviewPrompt`, `buildQualityReviewPrompt`, and `buildFinalReviewPrompt`. Delete the following existing tests that will break:
+- `buildPlanReviewPrompt` → `"mandates superteam-json output"` — delete this test
+- `buildPlanReviewPrompt` → `"mentions passed/findings/mustFix/summary fields"` — delete this test
+- `buildSpecReviewPrompt` → `"mandates superteam-json output"` — delete this test
+- `buildQualityReviewPrompt` → `"mandates superteam-json output"` — delete this test
+- `buildFinalReviewPrompt` → `"mandates superteam-json output"` — delete this test
 
 **Verification:** `npx vitest run src/workflow/prompt-builder.test.ts`
 
@@ -283,11 +287,14 @@ describe("REVIEW_OUTPUT_FORMAT removal", () => {
 
 ### Task 6: Inject `.pi/context.md` into subagent prompts in `dispatch.ts`
 
-**Export `buildSubprocessArgs` for testing**, write tests with real assertions, then implement.
+**Export `buildSubprocessArgs` for testing**, write tests with real tmpDir assertions, then implement.
 
 **Files:** `src/dispatch.ts`, `src/dispatch.test.ts`
 
 **Test code (add to `src/dispatch.test.ts`):**
+
+Note: `dispatch.test.ts` already imports `fs`, `path`, `os` and has a `makeAgent(overrides)` helper at the top. Use `path.dirname(new URL(import.meta.url).pathname)` for ESM-safe path resolution (not `__dirname`). The `buildSubprocessArgs` function does NOT add `--append-system-prompt` for the agent's own system prompt (that's done later in `runAgent`), so any `--append-system-prompt` in the returned args comes solely from context.md injection.
+
 ```typescript
 import { buildSubprocessArgs } from "./dispatch.ts";
 
@@ -337,7 +344,14 @@ describe("buildSubprocessArgs — context.md injection", () => {
 
 **Implementation:**
 1. Change `function buildSubprocessArgs` to `export function buildSubprocessArgs` (add `/** @internal — exported for testing */` JSDoc).
-2. After the existing implementer-specific block, add: if `fs.existsSync(path.join(cwd, '.pi', 'context.md'))`, push `--append-system-prompt` and `path.resolve(cwd, '.pi', 'context.md')` to args.
+2. After the existing implementer-specific block (the `if (agent.name === "implementer")` block), add:
+```typescript
+// Inject project context if available
+const contextPath = path.join(cwd, ".pi", "context.md");
+if (fs.existsSync(contextPath)) {
+  args.push("--append-system-prompt", path.resolve(contextPath));
+}
+```
 
 **Verification:** `npx vitest run src/dispatch.test.ts`
 
@@ -358,7 +372,7 @@ it("includes instruction to only review listed files, not test files unless targ
 });
 ```
 
-**Implementation:** In `buildSpecReviewPrompt`, add between the "Read these files" instruction and the existing lines:
+**Implementation:** In `buildSpecReviewPrompt`, add between the `"Read these files. Compare implementation against spec."` line and the `"Do NOT trust the implementer's self-report"` line:
 ```
 'Only review files listed below — do not review test files unless the task description explicitly targets test code.',
 ```
@@ -375,19 +389,20 @@ it("includes instruction to only review listed files, not test files unless targ
 
 **Test code (add to `src/dispatch.test.ts`):**
 
-Note: Use `import.meta.dirname` instead of `__dirname` (ESM project).
+Note: Use `path.dirname(new URL(import.meta.url).pathname)` for ESM-safe path resolution (matching `src/config.ts` pattern). Do NOT use `__dirname` or `require()`.
 
 ```typescript
 describe("security-reviewer agent profile", () => {
   it("includes bash in tools frontmatter", () => {
-    const agentsDir = path.resolve(import.meta.dirname, "../agents");
+    const thisDir = path.dirname(new URL(import.meta.url).pathname);
+    const agentsDir = path.resolve(thisDir, "../agents");
     const content = fs.readFileSync(path.join(agentsDir, "security-reviewer.md"), "utf-8");
     expect(content).toMatch(/^tools:.*bash/m);
   });
 });
 ```
 
-**Implementation:** Change `tools: read,grep,find,ls` to `tools: read,grep,find,ls,bash` in `agents/security-reviewer.md`.
+**Implementation:** Change `tools: read,grep,find,ls` to `tools: read,grep,find,ls,bash` in `agents/security-reviewer.md` (line 4 of the frontmatter).
 
 **Verification:** `npx vitest run src/dispatch.test.ts`
 
@@ -401,7 +416,7 @@ describe("security-reviewer agent profile", () => {
 
 **Test code (replace the existing `buildScoutPrompt` describe block in `src/workflow/prompt-builder.test.ts`):**
 
-The existing tests assert "key files", "directory structure", and "structured summary" — these will no longer match the narrowed prompt. Replace the entire `buildScoutPrompt` describe block:
+The existing tests assert `"key files"`, `"directory structure"`, and `"structured summary"` — these will no longer match the narrowed prompt. Replace the entire `buildScoutPrompt` describe block:
 
 ```typescript
 describe("buildScoutPrompt", () => {
@@ -474,25 +489,25 @@ describe("validationCommand config", () => {
 
 ### Task 11: Add `resetToSha` and `squashCommitsSince` to `git-utils.ts`
 
-**Write tests first** using temp git repos (matching the existing `makeTempRepo`/`makeTempDir` pattern in `git-utils.test.ts`), then implement.
+**Write tests first** using temp git repos (matching the existing `makeTempRepo`/`makeTempDir` pattern and dynamic imports of `child_process` already in `git-utils.test.ts`), then implement.
 
 **Files:** `src/workflow/git-utils.ts`, `src/workflow/git-utils.test.ts`
 
 **Test code (add to `src/workflow/git-utils.test.ts`):**
 
-Note: Reuse the existing `makeTempRepo()`, `makeTempDir()`, `getCurrentSha()` helpers already defined at top of file. Import new functions alongside existing ones.
+Reuse the existing `makeTempRepo()`, `makeTempDir()` helpers already defined at the top of the file. Import new functions alongside existing `getCurrentSha`. The test file already uses `await import("node:child_process")` for git setup commands — follow the same pattern:
 
 ```typescript
 import { resetToSha, squashCommitsSince } from "./git-utils.ts";
-import { execFile as execFileCb } from "node:child_process";
-import { promisify } from "node:util";
-
-const run = promisify(execFileCb);
 
 describe("resetToSha", () => {
   it("resets to a previous commit SHA", async () => {
     const dir = await makeTempRepo();
     const baseSha = await getCurrentSha(dir);
+
+    const { execFile: execCb } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const run = promisify(execCb);
 
     fs.writeFileSync(path.join(dir, "file2.txt"), "new");
     await run("git", ["add", "."], { cwd: dir });
@@ -533,6 +548,10 @@ describe("squashCommitsSince", () => {
     const dir = await makeTempRepo();
     const baseSha = await getCurrentSha(dir);
 
+    const { execFile: execCb } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const run = promisify(execCb);
+
     fs.writeFileSync(path.join(dir, "file2.txt"), "new");
     await run("git", ["add", "."], { cwd: dir });
     await run("git", ["commit", "-m", "second"], { cwd: dir });
@@ -572,9 +591,9 @@ describe("squashCommitsSince", () => {
 });
 ```
 
-**Implementation:** Add to `git-utils.ts`:
+**Implementation:** Add to `git-utils.ts` (using the existing promisified `execFile` already at the top of the file):
 - `resetToSha(cwd: string, sha: string): Promise<boolean>` — validates sha is non-empty, runs `git reset --hard <sha>`. Returns `false` on any failure (catch block).
-- `squashCommitsSince(cwd: string, baseSha: string, message: string): Promise<boolean>` — checks if `baseSha` equals HEAD (no-op → return true). Otherwise runs `git reset --soft <baseSha>` then `git commit -m <message>`. Returns `false` on failure.
+- `squashCommitsSince(cwd: string, baseSha: string, message: string): Promise<boolean>` — checks if `baseSha` equals HEAD (via `getCurrentSha`, no-op → return true). Otherwise runs `git reset --soft <baseSha>` then `git commit -m <message>`. Returns `false` on failure.
 
 **Verification:** `npx vitest run src/workflow/git-utils.test.ts`
 
@@ -619,7 +638,7 @@ describe("TaskExecState summary field", () => {
 });
 ```
 
-**Implementation:** Add to `TaskExecState` type:
+**Implementation:** Add to `TaskExecState` type in `orchestrator-state.ts`:
 ```typescript
 summary?: { title: string; status: string; changedFiles: string[] };
 ```
@@ -653,7 +672,22 @@ it("does not include previous task section when no summary provided", () => {
 });
 ```
 
-**Implementation:** Update `buildImplPrompt` signature to accept optional third parameter `previousTaskSummary?: { title: string; status: string; changedFiles: string[] }`. If provided, append a `## Previous task` section with title, status, and changed files list. Existing callers pass only 2 args, so backward compatible.
+**Implementation:** Update `buildImplPrompt` signature to accept optional third parameter `previousTaskSummary?: { title: string; status: string; changedFiles: string[] }`. If provided, prepend a `## Previous task` section before the main task content:
+```typescript
+const parts: string[] = [];
+if (previousTaskSummary) {
+  parts.push(
+    `## Previous task`,
+    `Title: ${previousTaskSummary.title}`,
+    `Status: ${previousTaskSummary.status}`,
+    `Changed files: ${previousTaskSummary.changedFiles.join(", ")}`,
+    ``,
+  );
+}
+// ... existing content follows
+```
+
+Existing callers pass only 2 args, so backward compatible.
 
 **Verification:** `npx vitest run src/workflow/prompt-builder.test.ts`
 
@@ -665,9 +699,9 @@ it("does not include previous task section when no summary provided", () => {
 
 **Files:** `src/workflow/phases/execute.ts`, `src/workflow/phases/execute.test.ts`
 
-The existing `execute.test.ts` mocks `git-utils.js` at the top. We need to add `resetToSha` to that mock.
+The existing `execute.test.ts` mocks `git-utils.js` at the top with `getCurrentSha` and `computeChangedFiles`. We need to add `resetToSha` to that mock.
 
-**Test code (add to `src/workflow/phases/execute.test.ts`):**
+**Test code (modify and add to `src/workflow/phases/execute.test.ts`):**
 
 First, update the existing `vi.mock("../git-utils.js")` block to include `resetToSha`:
 ```typescript
@@ -678,16 +712,16 @@ vi.mock("../git-utils.js", () => ({
 }));
 ```
 
-Then add import and mock ref:
+Then add import and mock ref alongside the existing ones:
 ```typescript
 import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.ts";
 const mockResetToSha = vi.mocked(resetToSha);
 ```
 
-Then add the test:
+Then add the tests:
 ```typescript
 describe("escalate with rollback option", () => {
-  it("offers Rollback alongside Retry/Skip/Abort", async () => {
+  it("offers Rollback when gitShaBeforeImpl is set and calls resetToSha", async () => {
     const state = makeState();
     state.tasks[0].gitShaBeforeImpl = "abc123sha";
     const ctx = makeCtx();
@@ -696,7 +730,7 @@ describe("escalate with rollback option", () => {
     mockDispatchAgent.mockResolvedValue(makeResult({ exitCode: 1, errorMessage: "Failed" }));
     mockResetToSha.mockResolvedValue(true);
 
-    // User selects Rollback first → triggers resetToSha, then on retry the impl fails again → Skip
+    // User selects Rollback → triggers resetToSha, then on retry impl fails again → Skip
     ctx.ui.select
       .mockResolvedValueOnce("Rollback")
       .mockResolvedValueOnce("Skip");
@@ -710,10 +744,36 @@ describe("escalate with rollback option", () => {
     // Verify resetToSha was called with the saved SHA
     expect(mockResetToSha).toHaveBeenCalledWith(ctx.cwd, "abc123sha");
   });
+
+  it("does not offer Rollback when gitShaBeforeImpl is not set", async () => {
+    const state = makeState();
+    // Do not set gitShaBeforeImpl
+    const ctx = makeCtx();
+
+    setupDefaultMocks();
+    mockDispatchAgent.mockResolvedValue(makeResult({ exitCode: 1, errorMessage: "Failed" }));
+
+    ctx.ui.select.mockResolvedValue("Skip");
+
+    await runExecutePhase(state, ctx);
+
+    const selectCalls = ctx.ui.select.mock.calls;
+    if (selectCalls.length > 0) {
+      expect(selectCalls[0][1]).not.toContain("Rollback");
+    }
+  });
 });
 ```
 
-**Implementation:** Modify `escalate()` signature to accept `cwd: string` in addition to existing params: `escalate(task, reason, ui, cwd)`. Offer 4 options: `["Retry", "Rollback", "Skip", "Abort"]`. When `"Rollback"` is selected, call `resetToSha(cwd, task.gitShaBeforeImpl!)` (import from `../git-utils.js`) then return `"retry"`. Update all call sites of `escalate` within `execute.ts` to pass `ctx.cwd`.
+**Implementation:**
+1. Import `resetToSha` from `../git-utils.js`.
+2. Modify `escalate()` signature to accept `cwd` and an optional `gitSha`: `escalate(task, reason, ui, cwd, gitSha?)`.
+3. Build options array dynamically: `const options = ["Retry", ...(gitSha ? ["Rollback"] : []), "Skip", "Abort"];`
+4. When `"Rollback"` is selected, call `await resetToSha(cwd, gitSha!)` then return `"retry"`.
+5. Update all call sites of `escalate` within `execute.ts`:
+   - "No implementer" escalation: `escalate(task, reason, ui, ctx.cwd)` (no gitSha → no Rollback offered)
+   - Post-impl failure: `escalate(task, reason, ui, ctx.cwd, task.gitShaBeforeImpl)`
+   - Review escalations: `escalate(task, reason, ui, ctx.cwd, task.gitShaBeforeImpl)`
 
 **Verification:** `npx vitest run src/workflow/phases/execute.test.ts`
 
@@ -721,50 +781,65 @@ describe("escalate with rollback option", () => {
 
 ### Task 15: Add validation gate before reviews in `execute.ts` (item 12)
 
-**Write test first**, then implement the validation command execution.
+**Write test first**, then implement the validation command execution via a testable wrapper.
 
 **Files:** `src/workflow/phases/execute.ts`, `src/workflow/phases/execute.test.ts`
 
 **Test code (add to `src/workflow/phases/execute.test.ts`):**
 
-The execute module needs to call `execFile` for the validation command. We mock it via `vi.mock("node:child_process")` or inject it. The simpler approach: mock `getConfig` to return a specific `validationCommand`, and mock `child_process.execFile` via `vi.mock`.
+To make validation testable without mocking `node:child_process` globally, extract a `runValidation(command: string, cwd: string): Promise<{ok: boolean; error?: string}>` function and export it for testing.
 
 ```typescript
-describe("validation gate (validationCommand)", () => {
-  it("skips validation gate when validationCommand is empty string", async () => {
-    const state = makeState();
-    const ctx = makeCtx();
-    setupDefaultMocks();
+import { runValidation } from "./execute.ts";
 
-    // The default config has validationCommand = "tsc --noEmit" but
-    // execute.ts should read from getConfig. We can test that the happy path
-    // still completes when validation passes (default mock behavior).
-    const result = await runExecutePhase(state, ctx);
-    expect(result.tasks[0].status).toBe("complete");
+describe("runValidation", () => {
+  it("returns ok:true for a command that succeeds", async () => {
+    const result = await runValidation("true", "/tmp");
+    expect(result.ok).toBe(true);
   });
 
-  it("enters escalation when validation command fails", async () => {
-    const state = makeState();
-    const ctx = makeCtx();
+  it("returns ok:false with error for a command that fails", async () => {
+    const result = await runValidation("false", "/tmp");
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeDefined();
+  });
+
+  it("returns ok:true for empty command (skips validation)", async () => {
+    const result = await runValidation("", "/tmp");
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("validation gate integration", () => {
+  it("completes task normally when validation command succeeds (default behavior)", async () => {
     setupDefaultMocks();
-
-    // After impl succeeds, validation should run.
-    // To test failure, we need the execFile to reject.
-    // This requires mocking child_process.execFile at the module level
-    // or having execute.ts accept a validation runner.
-    // For now, we verify the integration: implementation passes, reviews pass,
-    // task completes. Validation command execution is tested via the
-    // actual command running in integration tests.
-
-    const result = await runExecutePhase(state, ctx);
+    const state = makeState();
+    const result = await runExecutePhase(state, fakeCtx);
     expect(result.tasks[0].status).toBe("complete");
   });
 });
 ```
 
-**Implementation:** After implementation succeeds (exitCode === 0) and before the review loops, read `getConfig(ctx.cwd).validationCommand`. If it's a non-empty string, run it via `execFile` (from `node:child_process`) with 60-second timeout. Use `promisify(execFile)` and catch errors. On non-zero exit or error, enter escalation with `escalate(task, 'Validation failed: <stderr snippet>', ui, ctx.cwd)`. If `validationCommand` is `''`, skip the gate entirely.
-
-Note: The validation command execution is hard to unit test without heavy mocking of `child_process`. The implementation should use a thin wrapper function (e.g., `runValidation(command, cwd)`) that can be more easily tested or mocked in future. The primary verification is that the flow doesn't break — integration testing validates the actual command execution.
+**Implementation:**
+1. Add import at top of `execute.ts`: `import { execFile as execFileCb } from "node:child_process"` and `import { promisify } from "node:util"`.
+2. Export `runValidation(command: string, cwd: string): Promise<{ok: boolean; error?: string}>` with `/** @internal — exported for testing */` JSDoc:
+   - If `command` is empty string, return `{ok: true}` immediately.
+   - Otherwise, split `command` on whitespace: `const [cmd, ...args] = command.split(/\s+/)`.
+   - Run via `promisify(execFileCb)(cmd, args, {cwd, timeout: 60_000})`.
+   - On success: return `{ok: true}`.
+   - On error: return `{ok: false, error: stderr or error message}`.
+3. In the task loop, after implementation succeeds (exitCode === 0) and before the spec review dispatch:
+   ```typescript
+   const validationCmd = getConfig(ctx.cwd).validationCommand ?? "";
+   const validation = await runValidation(validationCmd, ctx.cwd);
+   if (!validation.ok) {
+     const escalation = await escalate(task, `Validation failed: ${validation.error}`, ui, ctx.cwd, task.gitShaBeforeImpl);
+     if (escalation === "abort") { state.error = "Aborted by user"; saveState(state, ctx.cwd); return state; }
+     if (escalation === "skip") { task.status = "skipped"; saveState(state, ctx.cwd); continue; }
+     task.status = "pending"; continue; // retry
+   }
+   ```
+4. Import `getConfig` from `../../config.js`.
 
 **Verification:** `npx vitest run src/workflow/phases/execute.test.ts`
 
@@ -772,11 +847,11 @@ Note: The validation command execution is hard to unit test without heavy mockin
 
 ## Batch D — Workflow UX
 
-### Task 16: Add `onStreamEvent` wiring to brainstorm phase
+### Task 16: Add `onStreamEvent` wiring to brainstorm, plan-write, plan-review phases
 
-**Write test first** verifying `onStreamEvent` callback is forwarded to `dispatchAgent`, then modify the phase signature.
+**Write tests first** verifying `onStreamEvent` callback is forwarded to `dispatchAgent`, then modify the phase signatures. This is a single task because all three phases follow the identical pattern.
 
-**Files:** `src/workflow/phases/brainstorm.ts`, `src/workflow/phases/brainstorm.test.ts`
+**Files:** `src/workflow/phases/brainstorm.ts`, `src/workflow/phases/plan-write.ts`, `src/workflow/phases/plan-review.ts`, `src/workflow/phases/brainstorm.test.ts`, `src/workflow/phases/plan-write.test.ts`, `src/workflow/phases/plan-review.test.ts`
 
 **Test code (add to `src/workflow/phases/brainstorm.test.ts`):**
 ```typescript
@@ -795,28 +870,13 @@ it("forwards onStreamEvent callback to dispatchAgent", async () => {
   const state = makeState();
   await runBrainstormPhase(state, ctx, undefined, onStreamEvent);
 
-  // Verify dispatchAgent was called with onStreamEvent in the 6th position
+  // dispatchAgent signature: (agent, task, cwd, signal?, onUpdate?, onStreamEvent?)
+  // Verify the 6th arg (index 5) is defined for the scout dispatch
   const firstDispatchCall = mockDispatchAgent.mock.calls[0];
   expect(firstDispatchCall.length).toBeGreaterThanOrEqual(6);
   expect(firstDispatchCall[5]).toBeDefined();
 });
 ```
-
-**Implementation:**
-- Add `onStreamEvent?: OnStreamEvent` parameter to `runBrainstormPhase` (4th param after `signal`).
-- Import `OnStreamEvent` type from `../../dispatch.js`.
-- Create an activity buffer and `makeOnStreamEvent` (same pattern as `execute.ts`).
-- Pass `onStreamEvent` or the activity-buffer-backed handler to every `dispatchAgent` call in the phase (scout dispatch and brainstormer dispatch calls).
-
-**Verification:** `npx vitest run src/workflow/phases/brainstorm.test.ts`
-
----
-
-### Task 17: Add `onStreamEvent` wiring to plan-write phase
-
-**Write test first** verifying `onStreamEvent` callback is forwarded to `dispatchAgent`, then modify the phase signature.
-
-**Files:** `src/workflow/phases/plan-write.ts`, `src/workflow/phases/plan-write.test.ts`
 
 **Test code (add to `src/workflow/phases/plan-write.test.ts`):**
 ```typescript
@@ -838,135 +898,62 @@ it("forwards onStreamEvent callback to dispatchAgent", async () => {
   const state = makeState();
   await runPlanWritePhase(state, ctx, undefined, onStreamEvent);
 
+  // dispatchAgent signature: (agent, task, cwd, signal?, onUpdate?, onStreamEvent?)
   const dispatchCall = mockDispatchAgent.mock.calls[0];
   expect(dispatchCall.length).toBeGreaterThanOrEqual(6);
   expect(dispatchCall[5]).toBeDefined();
 });
 ```
 
-**Implementation:**
-- Add `onStreamEvent?: OnStreamEvent` parameter to `runPlanWritePhase` (4th param after `signal`).
-- Import `OnStreamEvent` type from `../../dispatch.js`.
-- Pass `onStreamEvent` to every `dispatchAgent` call in the phase.
-
-**Verification:** `npx vitest run src/workflow/phases/plan-write.test.ts`
-
----
-
-### Task 18: Add `onStreamEvent` wiring to plan-review phase
-
-**Write test first** verifying `onStreamEvent` callback is forwarded to `dispatchAgent`, then modify the phase signature. Note: `plan-review.test.ts` does not currently exist and must be created.
-
-**Files:** `src/workflow/phases/plan-review.ts`, `src/workflow/phases/plan-review.test.ts`
-
-**Test code (create `src/workflow/phases/plan-review.test.ts`):**
+**Test code (add to the existing `describe("runPlanReviewPhase")` block in `src/workflow/phases/plan-review.test.ts`):**
 ```typescript
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import * as os from "node:os";
-
-vi.mock("../../dispatch.js", () => ({
-  discoverAgents: vi.fn(),
-  dispatchAgent: vi.fn(),
-  dispatchParallel: vi.fn(),
-  getFinalOutput: vi.fn(),
-}));
-
-vi.mock("../orchestrator-state.js", async (importOriginal) => {
-  const orig = await importOriginal<typeof import("../orchestrator-state.ts")>();
-  return { ...orig, saveState: vi.fn() };
-});
-
-vi.mock("../../review-parser.js", async (importOriginal) => {
-  const orig = await importOriginal<typeof import("../../review-parser.ts")>();
-  return { ...orig, parseReviewOutput: vi.fn() };
-});
-
-import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput } from "../../dispatch.ts";
-import { parseReviewOutput } from "../../review-parser.ts";
-import type { AgentProfile, DispatchResult } from "../../dispatch.ts";
-
-const mockDiscoverAgents = vi.mocked(discoverAgents);
-const mockDispatchAgent = vi.mocked(dispatchAgent);
-const mockDispatchParallel = vi.mocked(dispatchParallel);
-const mockGetFinalOutput = vi.mocked(getFinalOutput);
-const mockParseReviewOutput = vi.mocked(parseReviewOutput);
-
-function makeAgent(name: string): AgentProfile {
-  return { name, description: name, systemPrompt: "", source: "package", filePath: `/agents/${name}.md` };
-}
-
-function makeDispatchResult(cost = 0.1): DispatchResult {
-  return {
-    agent: "test", agentSource: "package", task: "", exitCode: 0, messages: [], stderr: "",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost, contextTokens: 0, turns: 0 },
-  };
-}
-
-describe("runPlanReviewPhase onStreamEvent", () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-review-"));
-    mockDiscoverAgents.mockReturnValue({
-      agents: [makeAgent("architect"), makeAgent("spec-reviewer"), makeAgent("planner")],
-      projectAgentsDir: null,
-    });
-    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
-    mockGetFinalOutput.mockReturnValue('```superteam-json\n{"passed":true,"findings":[],"mustFix":[],"summary":"ok"}\n```');
-    mockParseReviewOutput.mockReturnValue({
-      status: "pass",
-      findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
-    });
+it("forwards onStreamEvent callback to dispatchAgent", async () => {
+  mockDiscoverAgents.mockReturnValue({
+    agents: [makeAgent("architect"), makeAgent("planner")],
+    projectAgentsDir: null,
   });
+  mockDispatchAgent.mockResolvedValue(makeDispatchResult("architect"));
+  mockGetFinalOutput.mockReturnValue(passReviewJson());
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
+  const ctx = makeCtx();
+  ctx.ui.select.mockResolvedValue("Approve");
 
-  it("forwards onStreamEvent callback to dispatchAgent", async () => {
-    const { runPlanReviewPhase } = await import("./plan-review.js");
-    const ctx = {
-      cwd: tmpDir,
-      hasUI: true,
-      ui: { select: vi.fn().mockResolvedValue("Approve"), notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn(), editor: vi.fn() },
-    } as any;
+  const onStreamEvent = vi.fn();
+  const state = makeStateWithPlan();
+  await runPlanReviewPhase(state, ctx, undefined, onStreamEvent);
 
-    const onStreamEvent = vi.fn();
-    const state = {
-      phase: "plan-review",
-      config: { reviewMode: "single-pass", maxPlanReviewCycles: 1 },
-      planContent: "# Plan\n```superteam-tasks\n- title: T\n  description: D\n  files: [a.ts]\n```",
-      planPath: "docs/plans/test-plan.md",
-      designContent: "# Design",
-      tasks: [],
-      currentTaskIndex: 0,
-      totalCostUsd: 0,
-      planReviewCycles: 0,
-    } as any;
-
-    await runPlanReviewPhase(state, ctx, undefined, onStreamEvent);
-
-    // Verify dispatchAgent received onStreamEvent
-    const dispatchCall = mockDispatchAgent.mock.calls[0];
-    expect(dispatchCall.length).toBeGreaterThanOrEqual(6);
-    expect(dispatchCall[5]).toBeDefined();
-  });
+  // With only one reviewer (architect), dispatchAgent is used (not dispatchParallel)
+  // dispatchAgent signature: (agent, task, cwd, signal?, onUpdate?, onStreamEvent?)
+  const dispatchCall = mockDispatchAgent.mock.calls[0];
+  expect(dispatchCall.length).toBeGreaterThanOrEqual(6);
+  expect(dispatchCall[5]).toBeDefined();
 });
 ```
 
-**Implementation:**
-- Add `onStreamEvent?: OnStreamEvent` parameter to `runPlanReviewPhase` (4th param after `signal`).
+**Implementation for all three phases:**
+- Add `onStreamEvent?: OnStreamEvent` parameter as 4th param after `signal` to `runBrainstormPhase`, `runPlanWritePhase`, `runPlanReviewPhase`.
 - Import `OnStreamEvent` type from `../../dispatch.js`.
-- Pass `onStreamEvent` to `dispatchAgent` and `dispatchParallel` calls.
+- Import `createActivityBuffer`, `formatToolAction` from `../ui.js`.
+- Create activity buffer and `makeOnStream` handler (same pattern as `execute.ts`):
+  ```typescript
+  const activityBuffer = createActivityBuffer(10);
+  const makeOnStream = (): OnStreamEvent => (event) => {
+    if (event.type === "tool_execution_start") {
+      const action = formatToolAction(event);
+      activityBuffer.push(action);
+      ui?.setStatus?.("workflow", action);
+      ui?.setWidget?.("workflow-activity", activityBuffer.lines());
+    }
+  };
+  ```
+- Pass `undefined` as 5th arg (onUpdate) and `makeOnStream()` as 6th arg to every `dispatchAgent` call.
+- For `dispatchParallel` calls (multi-reviewer case in plan-review): `dispatchParallel` doesn't support per-agent `onStreamEvent` — known limitation, no change needed there.
 
-**Verification:** `npx vitest run src/workflow/phases/plan-review.test.ts`
+**Verification:** `npx vitest run src/workflow/phases/brainstorm.test.ts src/workflow/phases/plan-write.test.ts src/workflow/phases/plan-review.test.ts`
 
 ---
 
-### Task 19: Add brainstorm skip option (item 3)
+### Task 17: Add brainstorm skip option (item 3)
 
 **Write test first** for the skip flow, then implement.
 
@@ -1014,13 +1001,31 @@ it("continues normal Q&A flow when user selects 'Continue Q&A'", async () => {
 });
 ```
 
-**Implementation:** After scout dispatch completes and `state.brainstorm.scoutOutput` is set (currently the code sets `step = "questions"` immediately), insert a `ui.select('Continue brainstorm or skip to planning?', ['Continue Q&A', 'Skip to plan'])` check. If `'Skip to plan'` is selected, set `state.brainstorm.step = 'done'` and `state.phase = 'plan-write'`, then return state. If `'Continue Q&A'`, proceed to the existing questions step (set `step = "questions"` as before).
+**Implementation:** In `runBrainstormPhase`, after scout dispatch completes and `state.brainstorm.scoutOutput` is set (currently the code immediately sets `state.brainstorm.step = "questions"`), insert a `ui.select` check before that assignment:
+
+```typescript
+// After setting scoutOutput
+state.brainstorm.scoutOutput = getFinalOutput(result.messages);
+
+// Offer skip option
+const skipChoice = await ui?.select?.("Continue brainstorm or skip to planning?", ["Continue Q&A", "Skip to plan"]);
+if (skipChoice === "Skip to plan") {
+  state.brainstorm.step = "done";
+  state.phase = "plan-write";
+  saveState(state, ctx.cwd);
+  return state;
+}
+
+state.brainstorm.step = "questions";
+```
+
+The key change: move `state.brainstorm.step = "questions"` to after the skip check, and only set it if user chooses "Continue Q&A".
 
 **Verification:** `npx vitest run src/workflow/phases/brainstorm.test.ts`
 
 ---
 
-### Task 20: Add plan file path fallback in `plan-write.ts` (item 6)
+### Task 18: Add plan file path fallback in `plan-write.ts` (item 6)
 
 **Write test first**, then implement the fallback search.
 
@@ -1052,14 +1057,15 @@ it("falls back to searching docs/plans/ for recent design file when designPath i
   expect(result.phase).toBe("plan-review");
 });
 
-it("generates a date-based plan path when designPath is undefined", async () => {
+it("generates a date-based plan path when designPath is undefined and no design file found", async () => {
   const { runPlanWritePhase } = await import("./plan-write.js");
   const ctx = { cwd: tmpDir, hasUI: true, ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() } } as any;
+
+  const today = new Date().toISOString().slice(0, 10);
 
   mockDispatchAgent.mockImplementation(async () => {
     const planDir = path.join(tmpDir, "docs/plans");
     fs.mkdirSync(planDir, { recursive: true });
-    const today = new Date().toISOString().slice(0, 10);
     fs.writeFileSync(
       path.join(planDir, `${today}-plan.md`),
       "```superteam-tasks\n- title: T\n  description: D\n  files: [a.ts]\n```"
@@ -1075,7 +1081,29 @@ it("generates a date-based plan path when designPath is undefined", async () => 
 });
 ```
 
-**Implementation:** In `runPlanWritePhase`, when `state.designPath` is undefined and `state.designContent` is also undefined, search `docs/plans/` for the most recent `*-design.md` file (sort by name descending, pick first). If found, read its content and set `designContent`. The plan path derivation already handles the undefined case with a date-based fallback.
+**Implementation:** In `runPlanWritePhase`, before the plan path derivation, add fallback logic:
+
+```typescript
+// Fallback: if no designPath, search docs/plans/ for most recent *-design.md
+if (!state.designPath && !state.designContent) {
+  const plansDir = path.join(ctx.cwd, "docs/plans");
+  try {
+    const files = fs.readdirSync(plansDir)
+      .filter(f => f.endsWith("-design.md"))
+      .sort()
+      .reverse();
+    if (files.length > 0) {
+      const designFile = files[0];
+      state.designPath = `docs/plans/${designFile}`;
+      state.designContent = fs.readFileSync(path.join(plansDir, designFile), "utf-8");
+    }
+  } catch {
+    // docs/plans/ doesn't exist — continue with empty design
+  }
+}
+```
+
+This must be placed before the existing plan path derivation line so the discovered `designPath` feeds into plan path generation.
 
 **Verification:** `npx vitest run src/workflow/phases/plan-write.test.ts`
 
@@ -1087,21 +1115,24 @@ it("generates a date-based plan path when designPath is undefined", async () => 
 Batch A (sequential):
   Task 1 → Task 2 → Task 3 → Task 4 → Task 5
 
-Batch B (independent of A, internal order):
-  Task 6 → Task 9 (scout prompt depends on context.md injection)
+Batch B (mostly independent, internal order):
+  Task 6 (independent)
   Task 7 (independent)
   Task 8 (independent)
+  Task 9 (depends on Task 6: scout prompt narrowing assumes context.md injection is live)
 
 Batch C (depends on Batch A completing):
-  Task 10, Task 11, Task 12 (independent of each other)
+  Task 10 (independent)
+  Task 11 (independent)
+  Task 12 (independent)
   Task 13 (depends on Task 12)
   Task 14 (depends on Task 11)
-  Task 15 (depends on Task 10)
+  Task 15 (depends on Task 10 and Task 14)
 
-Batch D (depends on Batch A completing):
-  Task 16, Task 17, Task 18 (independent of each other)
-  Task 19 (independent)
-  Task 20 (independent)
+Batch D (independent of other batches):
+  Task 16 (independent)
+  Task 17 (independent)
+  Task 18 (independent)
 ```
 
 ---
@@ -1110,9 +1141,11 @@ Batch D (depends on Batch A completing):
 - title: Create extractFencedBlock in parse-utils.ts
   description: >
     Write tests for generalized extractFencedBlock(text, language) in src/parse-utils.test.ts,
-    then implement in src/parse-utils.ts. Supports superteam-brainstorm and superteam-json
-    languages, quote-aware fence detection, nested fences inside JSON strings, missing closing
-    fence, empty content, leading whitespace.
+    then implement in src/parse-utils.ts. Uses the quote-aware scanning algorithm from
+    brainstorm-parser.ts, generalized with a dynamic openPattern regex built from the language
+    parameter. Tests cover superteam-brainstorm and superteam-json languages, quote-aware fence
+    detection, nested fences inside JSON strings, missing closing fence, empty content, leading
+    whitespace.
   files: [src/parse-utils.ts, src/parse-utils.test.ts]
 
 - title: Add extractLastBraceBlock and sanitizeJsonNewlines to parse-utils.ts
@@ -1127,61 +1160,68 @@ Batch D (depends on Batch A completing):
   description: >
     Replace local extractFencedBlock, extractLastBraceBlock, sanitizeJsonNewlines in
     brainstorm-parser.ts with imports from ../parse-utils.js. Pass 'superteam-brainstorm'
-    as language. Delete local copies. Verify existing brainstorm-parser tests still pass.
+    as language. Delete local copies of all three functions. Verify existing
+    brainstorm-parser.test.ts and brainstorm-parser.acceptance.test.ts still pass — purely
+    structural extraction.
   files: [src/workflow/brainstorm-parser.ts]
 
 - title: Wire review-parser.ts to use parse-utils.ts
   description: >
     Replace naive regex extractFencedBlock and local extractLastBraceBlock in review-parser.ts
-    with imports from ./parse-utils.js. Add sanitizeJsonNewlines pre-parse step. Create
-    src/review-parser.test.ts with tests for literal newlines in JSON strings, triple-backtick
-    inside JSON, and previously inconclusive outputs that now parse correctly.
+    with imports from ./parse-utils.js. Add sanitizeJsonNewlines as a pre-parse step before
+    JSON.parse in parseAndValidate (wrap jsonStr with sanitizeJsonNewlines). Create
+    src/review-parser.test.ts (does not exist yet) with tests for literal newlines in JSON
+    strings, triple-backtick inside JSON, and previously inconclusive outputs that now parse
+    correctly.
   files: [src/review-parser.ts, src/review-parser.test.ts]
 
 - title: Delete REVIEW_OUTPUT_FORMAT from prompt-builder.ts
   description: >
     Write tests asserting review prompts do NOT contain the duplicated IMPORTANT format
-    instruction. Use import.meta.dirname (not __dirname) and fs imports (not require) for
-    ESM compatibility. Verify all 5 reviewer agent .md files contain the superteam-json
-    format. Delete the REVIEW_OUTPUT_FORMAT constant and remove references from
-    buildPlanReviewPrompt, buildSpecReviewPrompt, buildQualityReviewPrompt, buildFinalReviewPrompt.
-    Update existing tests that assert superteam-json IS present — change to assert NOT present
-    or remove: buildPlanReviewPrompt "mandates superteam-json output", buildSpecReviewPrompt
-    "mandates superteam-json output", buildQualityReviewPrompt "mandates superteam-json output",
-    buildFinalReviewPrompt "mandates superteam-json output", and buildPlanReviewPrompt
-    "mentions passed/findings/mustFix/summary fields".
+    instruction. Use path.dirname(new URL(import.meta.url).pathname) for ESM-safe path
+    resolution (matching the pattern in src/config.ts — do NOT use __dirname, import.meta.dirname,
+    or require()). Verify all 5 reviewer agent .md files contain the superteam-json format.
+    Delete the REVIEW_OUTPUT_FORMAT constant and remove references from buildPlanReviewPrompt,
+    buildSpecReviewPrompt, buildQualityReviewPrompt, buildFinalReviewPrompt. Delete these
+    existing tests that will break: "mandates superteam-json output" tests in
+    buildPlanReviewPrompt, buildSpecReviewPrompt, buildQualityReviewPrompt, buildFinalReviewPrompt
+    describe blocks, and "mentions passed/findings/mustFix/summary fields" in buildPlanReviewPrompt.
   files: [src/workflow/prompt-builder.ts, src/workflow/prompt-builder.test.ts]
 
 - title: Inject .pi/context.md into subagent prompts
   description: >
-    Export buildSubprocessArgs with @internal JSDoc. Write tests in dispatch.test.ts with
-    real assertions: create tmpDir with .pi/context.md, call buildSubprocessArgs, verify
-    args contain --append-system-prompt with resolved path. Test without context.md too.
-    Test non-implementer agents also get the flag. Implement by checking
-    fs.existsSync(path.join(cwd, '.pi', 'context.md')) in buildSubprocessArgs.
+    Export buildSubprocessArgs with @internal JSDoc. Write tests in dispatch.test.ts using
+    real tmpDirs (not mocked fs). buildSubprocessArgs does NOT add --append-system-prompt for
+    the agent's own system prompt (that's done later in runAgent), so any --append-system-prompt
+    in the returned args comes solely from context.md injection. Test with .pi/context.md
+    present (verify arg and resolved path), absent (verify no --append-system-prompt), and for
+    non-implementer agents. Implement by checking fs.existsSync for .pi/context.md after the
+    implementer-specific block and appending to args.
   files: [src/dispatch.ts, src/dispatch.test.ts]
 
 - title: Add test-file instruction to buildSpecReviewPrompt
   description: >
     Write test asserting buildSpecReviewPrompt output contains instruction to not review
-    test files unless task explicitly targets test code. Add the instruction line to the
-    prompt builder function.
+    test files unless task explicitly targets test code. Add the instruction line between
+    the "Read these files" and "Do NOT trust" lines in the prompt builder function.
   files: [src/workflow/prompt-builder.ts, src/workflow/prompt-builder.test.ts]
 
 - title: Add bash to security-reviewer tools
   description: >
     Add assertion in dispatch.test.ts verifying security-reviewer.md has bash in its tools
-    frontmatter. Use import.meta.dirname (not __dirname) for ESM compatibility. Change tools
-    line from 'read,grep,find,ls' to 'read,grep,find,ls,bash' in agents/security-reviewer.md.
+    frontmatter. Use path.dirname(new URL(import.meta.url).pathname) for ESM-safe path
+    resolution (matching src/config.ts pattern — do NOT use __dirname, import.meta.dirname,
+    or require()). Change tools line from 'read,grep,find,ls' to 'read,grep,find,ls,bash'
+    in agents/security-reviewer.md (line 4 of frontmatter).
   files: [agents/security-reviewer.md, src/dispatch.test.ts]
 
 - title: Narrow scout prompt
   description: >
     Replace the entire existing buildScoutPrompt describe block in prompt-builder.test.ts
     (old tests assert "key files", "directory structure", "structured summary" which won't
-    match the narrowed prompt). New tests: instructs to read .pi/context.md, asks for tech
-    stack, directory layout, entry points, test conventions, max 500 words. Replace
-    buildScoutPrompt implementation with the narrowed version.
+    match the narrowed prompt). New tests verify: includes cwd, instructs to read context.md,
+    asks for tech stack/directory/entry points/test conventions, limits to 500 words. Replace
+    buildScoutPrompt implementation with the narrowed 3-line version.
   files: [src/workflow/prompt-builder.ts, src/workflow/prompt-builder.test.ts]
 
 - title: Add validationCommand to SuperteamConfig
@@ -1225,47 +1265,46 @@ Batch D (depends on Batch A completing):
 
 - title: Add validation gate before reviews in execute.ts
   description: >
-    Write test for validation command execution after implementation and before reviews.
-    Read validationCommand from config, run via promisified execFile with 60s timeout.
-    On failure, enter escalation. On empty string, skip gate entirely. Implementation
-    should use a thin runValidation wrapper for future testability.
+    Export a testable runValidation(command, cwd) function with @internal JSDoc that returns
+    {ok, error?}. Write direct tests: "true" command succeeds, "false" command fails, empty
+    string skips. Write integration test verifying task completes normally (default behavior).
+    In the task loop, after implementation succeeds and before spec review, read
+    validationCommand from getConfig(ctx.cwd), call runValidation. On failure, enter
+    escalation. Import getConfig from ../../config.js, execFile from node:child_process,
+    promisify from node:util.
   files: [src/workflow/phases/execute.ts, src/workflow/phases/execute.test.ts]
 
-- title: Add onStreamEvent wiring to brainstorm phase
+- title: Add onStreamEvent wiring to brainstorm, plan-write, plan-review
   description: >
-    Write test in brainstorm.test.ts verifying onStreamEvent callback is forwarded to
-    dispatchAgent calls (check 6th arg is defined). Add onStreamEvent parameter to
-    runBrainstormPhase. Import OnStreamEvent type. Create activity buffer and pass to
-    all dispatch calls.
-  files: [src/workflow/phases/brainstorm.ts, src/workflow/phases/brainstorm.test.ts]
-
-- title: Add onStreamEvent wiring to plan-write phase
-  description: >
-    Write test in plan-write.test.ts verifying onStreamEvent callback is forwarded to
-    dispatchAgent calls (check 6th arg is defined). Add onStreamEvent parameter to
-    runPlanWritePhase. Import OnStreamEvent type. Pass to all dispatch calls.
-  files: [src/workflow/phases/plan-write.ts, src/workflow/phases/plan-write.test.ts]
-
-- title: Add onStreamEvent wiring to plan-review phase
-  description: >
-    Create plan-review.test.ts (does not exist yet). Write test verifying onStreamEvent
-    callback is forwarded to dispatchAgent. Set up mocks for discoverAgents, dispatchAgent,
-    getFinalOutput, parseReviewOutput. Add onStreamEvent parameter to runPlanReviewPhase.
-    Import OnStreamEvent type. Pass to dispatchAgent and dispatchParallel calls.
-  files: [src/workflow/phases/plan-review.ts, src/workflow/phases/plan-review.test.ts]
+    Write tests in brainstorm.test.ts, plan-write.test.ts, and the EXISTING plan-review.test.ts
+    (it already has 10+ tests with helpers makeAgent, makeDispatchResult, passReviewJson,
+    makeCtx, makeStateWithPlan — add to existing describe block, do NOT recreate file).
+    Verify onStreamEvent callback is forwarded to dispatchAgent calls (check 6th positional
+    arg at index 5 is defined). Add onStreamEvent parameter as 4th param after signal to
+    runBrainstormPhase, runPlanWritePhase, runPlanReviewPhase. Import OnStreamEvent type
+    from ../../dispatch.js, createActivityBuffer and formatToolAction from ../ui.js. Create
+    activity buffer and makeOnStream handler matching execute.ts pattern. Pass undefined as
+    5th arg (onUpdate) and makeOnStream() as 6th arg to all dispatchAgent calls.
+  files: [src/workflow/phases/brainstorm.ts, src/workflow/phases/plan-write.ts, src/workflow/phases/plan-review.ts, src/workflow/phases/brainstorm.test.ts, src/workflow/phases/plan-write.test.ts, src/workflow/phases/plan-review.test.ts]
 
 - title: Add brainstorm skip option
   description: >
     Write tests for skip flow: after scout, user selects 'Skip to plan' via ui.select →
-    state transitions to plan-write with scoutOutput preserved. Also test 'Continue Q&A'
-    proceeds normally. Implement by adding ui.select after scout dispatch completes,
-    before setting step to "questions".
+    state transitions to plan-write with step='done' and scoutOutput preserved. Also test
+    'Continue Q&A' proceeds to normal Q&A flow (mockParseBrainstorm gets called). Implement
+    by adding ui.select("Continue brainstorm or skip to planning?", ["Continue Q&A",
+    "Skip to plan"]) after scout dispatch completes and scoutOutput is set, before setting
+    step to "questions". Move the step="questions" assignment to after the skip check. If
+    skip, set step="done" and phase="plan-write", save state and return early.
   files: [src/workflow/phases/brainstorm.ts, src/workflow/phases/brainstorm.test.ts]
 
 - title: Add plan file path fallback in plan-write.ts
   description: >
-    Write tests for fallback when designPath is undefined: search docs/plans/ for most
-    recent *-design.md, read its content, use it for planning. Test date-based plan path
-    generation. Implement fallback search logic in runPlanWritePhase.
+    Write tests for fallback when designPath is undefined: (1) search docs/plans/ for most
+    recent *-design.md by name (sorted descending), read its content, set both designPath
+    and designContent on state, verify tasks are parsed and phase transitions to plan-review.
+    (2) When no design file found and designPath is undefined, use date-based plan path.
+    Implement fallback search logic before the existing planPath derivation line so
+    discovered designPath feeds into the existing path generation logic.
   files: [src/workflow/phases/plan-write.ts, src/workflow/phases/plan-write.test.ts]
 ```

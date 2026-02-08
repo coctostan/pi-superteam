@@ -16,6 +16,7 @@ import {
 	buildBrainstormApproachesPrompt,
 	buildBrainstormDesignPrompt,
 	buildBrainstormSectionRevisionPrompt,
+	buildTargetedPlanRevisionPrompt,
 } from "./prompt-builder.ts";
 import type { TaskExecState, BrainstormQuestion, BrainstormApproach, DesignSection } from "./orchestrator-state.ts";
 import type { ReviewFindings } from "../review-parser.ts";
@@ -418,5 +419,36 @@ describe("buildBrainstormSectionRevisionPrompt", () => {
 		};
 		const result = buildBrainstormSectionRevisionPrompt(section, "Add more detail", "Some context");
 		expect(result.toLowerCase()).toContain(NEWLINE_WARNING);
+	});
+});
+
+describe("buildTargetedPlanRevisionPrompt", () => {
+	it("includes plan content", () => {
+		const result = buildTargetedPlanRevisionPrompt("# Plan\nTask list here", "Missing error handling", "# Design");
+		expect(result).toContain("# Plan");
+		expect(result).toContain("Task list here");
+	});
+
+	it("includes findings", () => {
+		const result = buildTargetedPlanRevisionPrompt("plan content", "Task 3 is missing tests", "design");
+		expect(result).toContain("Task 3 is missing tests");
+	});
+
+	it("includes design content", () => {
+		const result = buildTargetedPlanRevisionPrompt("plan", "findings", "# Design\nPassport.js approach");
+		expect(result).toContain("Passport.js approach");
+	});
+
+	it("instructs targeted edits — not full rewrite", () => {
+		const result = buildTargetedPlanRevisionPrompt("plan", "findings", "design");
+		const lower = result.toLowerCase();
+		expect(lower).toContain("only");
+		expect(lower).toMatch(/task.*mentioned|referenced/);
+		expect(lower).toContain("preserve");
+	});
+
+	it("instructs to keep the superteam-tasks block", () => {
+		const result = buildTargetedPlanRevisionPrompt("plan", "findings", "design");
+		expect(result).toContain("superteam-tasks");
 	});
 });

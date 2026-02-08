@@ -2,7 +2,7 @@ import type { OrchestratorState, TaskExecState } from "../orchestrator-state.js"
 import { saveState } from "../orchestrator-state.js";
 import { buildImplPrompt, buildFixPrompt, buildSpecReviewPrompt, buildQualityReviewPrompt, extractPlanContext } from "../prompt-builder.js";
 import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.js";
-import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, type AgentProfile, type OnStreamEvent } from "../../dispatch.js";
+import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, hasWriteToolCalls, type AgentProfile, type OnStreamEvent } from "../../dispatch.js";
 import { parseReviewOutput, formatFindings, hasCriticalFindings, type ReviewFindings, type ParseResult } from "../../review-parser.js";
 import { formatToolAction, formatTaskProgress, createActivityBuffer } from "../ui.js";
 import { getConfig } from "../../config.js";
@@ -325,10 +325,22 @@ async function runReviewLoop(
 	let currentChangedFiles = changedFiles;
 
 	for (let attempt = 0; attempt < maxRetries; attempt++) {
-		const reviewResult = await dispatchAgent(
+		let reviewResult = await dispatchAgent(
 			reviewer, buildPrompt(task, currentChangedFiles), ctx.cwd, signal, undefined, makeOnStreamEvent(),
 		);
 		state.totalCostUsd += reviewResult.usage.cost;
+
+		// Write-guard: if reviewer wrote files, warn and re-dispatch once
+		if (hasWriteToolCalls(reviewResult.messages)) {
+			ui?.notify?.(`Reviewer ${reviewType} attempted write operations — re-dispatching`, "warning");
+			reviewResult = await dispatchAgent(
+				reviewer, buildPrompt(task, currentChangedFiles), ctx.cwd, signal, undefined, makeOnStreamEvent(),
+			);
+			state.totalCostUsd += reviewResult.usage.cost;
+			if (hasWriteToolCalls(reviewResult.messages)) {
+				ui?.notify?.(`Reviewer ${reviewType} wrote files on retry — escalating`, "warning");
+			}
+		}
 
 		const output = getFinalOutput(reviewResult.messages);
 		const parsed = parseReviewOutput(output);

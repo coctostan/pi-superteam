@@ -8,7 +8,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { OrchestratorState, TaskExecState } from "../orchestrator-state.js";
 import { discoverAgents, dispatchAgent, getFinalOutput, type OnStreamEvent } from "../../dispatch.js";
 import { buildPlannerPromptFromDesign } from "../prompt-builder.js";
-import { parseTaskBlock, parseTaskHeadings } from "../state.js";
+import { parseTaskBlock, parseTaskHeadings } from "../plan-parser.js";
 import { formatToolAction, createActivityBuffer } from "../ui.js";
 
 type Ctx = ExtensionContext | { cwd: string; hasUI?: boolean; ui?: any };

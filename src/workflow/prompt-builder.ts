@@ -344,6 +344,33 @@ export function buildPlanRevisionPromptFromFindings(
 	].join("\n");
 }
 
+// --- Targeted plan revision ---
+
+export function buildTargetedPlanRevisionPrompt(
+	planContent: string,
+	findings: string,
+	designContent: string,
+): string {
+	return [
+		`Revise this plan based on review findings. Write the updated plan to the same file.`,
+		``,
+		`## IMPORTANT: Targeted edits only`,
+		`- Edit ONLY the tasks mentioned or referenced in the findings below.`,
+		`- Do NOT rewrite other tasks — leave them exactly as they are.`,
+		`- Preserve existing task IDs and ordering unless findings specifically require changes.`,
+		`- Keep the \`\`\`superteam-tasks block intact with all tasks.`,
+		``,
+		`## Current plan`,
+		planContent,
+		``,
+		`## Approved design`,
+		designContent,
+		``,
+		`## Review findings`,
+		findings,
+	].join("\n");
+}
+
 // --- Utilities ---
 
 export function extractPlanContext(planContent: string): string {

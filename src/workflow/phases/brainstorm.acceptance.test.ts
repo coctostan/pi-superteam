@@ -120,6 +120,8 @@ describe("Brainstorm phase acceptance tests", () => {
         },
       } as any);
 
+    // User chooses to start brainstorm (skip prompt)
+    ctx.ui.select.mockResolvedValueOnce("Start brainstorm");
     // User answers the question
     ctx.ui.input.mockResolvedValueOnce("OAuth2");
     // User picks the approach

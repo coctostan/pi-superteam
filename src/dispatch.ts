@@ -577,6 +577,57 @@ export async function dispatchChain(
 	return results;
 }
 
+// --- Write-guard ---
+
+/** Bash command patterns that indicate write operations */
+const WRITE_BASH_PATTERNS = [
+	/[^>]?>(?!>)/, // single > redirect (but not >>)
+	/>>/,          // >> append
+	/\btee\b/,
+	/\bsed\s+-i\b/,
+	/\bmv\b/,
+	/\bcp\b/,
+	/\brm\b/,
+	/\bmkdir\b/,
+	/\bchmod\b/,
+	/\bchown\b/,
+	/\btouch\b/,
+];
+
+/** Write tool names */
+const WRITE_TOOL_NAMES = new Set(["write", "edit"]);
+
+/**
+ * Scan agent messages for tool calls that write to the filesystem.
+ * Returns true if any write tool call is found.
+ */
+export function hasWriteToolCalls(messages: Message[]): boolean {
+	for (const msg of messages) {
+		if (msg.role !== "assistant") continue;
+		if (!Array.isArray(msg.content)) continue;
+
+		for (const part of msg.content) {
+			if (part.type !== "tool_use") continue;
+
+			const toolName = (part as any).name as string;
+
+			// Direct write tools
+			if (WRITE_TOOL_NAMES.has(toolName)) return true;
+
+			// Bash write heuristics
+			if (toolName === "bash") {
+				const command = (part as any).input?.command as string;
+				if (command) {
+					for (const pattern of WRITE_BASH_PATTERNS) {
+						if (pattern.test(command)) return true;
+					}
+				}
+			}
+		}
+	}
+	return false;
+}
+
 // --- Utilities ---
 
 async function mapWithConcurrencyLimit<TIn, TOut>(

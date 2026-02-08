@@ -9,6 +9,7 @@ vi.mock("../../dispatch.js", () => ({
 	dispatchAgent: vi.fn(),
 	dispatchParallel: vi.fn(),
 	getFinalOutput: vi.fn(),
+	hasWriteToolCalls: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("../orchestrator-state.js", async (importOriginal) => {
@@ -16,7 +17,7 @@ vi.mock("../orchestrator-state.js", async (importOriginal) => {
 	return { ...orig, saveState: vi.fn() };
 });
 
-import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput } from "../../dispatch.ts";
+import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, hasWriteToolCalls } from "../../dispatch.ts";
 import { saveState } from "../orchestrator-state.ts";
 import { runPlanReviewPhase } from "./plan-review.ts";
 import type { AgentProfile, DispatchResult } from "../../dispatch.ts";
@@ -293,7 +294,12 @@ describe("runPlanReviewPhase", () => {
 				if (agent.name === "planner") fs.writeFileSync(planPath, planContent);
 				return makeDispatchResult(agent.name);
 			});
-			mockGetFinalOutput.mockReturnValue(failReviewJson());
+			// Return DIFFERENT findings each time to avoid convergence detection
+			let failCount = 0;
+			mockGetFinalOutput.mockImplementation(() => {
+				failCount++;
+				return failReviewJson(`Issue number ${failCount}`);
+			});
 
 			const ctx = makeCtx(tmpDir);
 			ctx.ui.select.mockResolvedValue("Approve");
@@ -417,6 +423,107 @@ describe("runPlanReviewPhase", () => {
 		} finally {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}
+	});
+
+	it("escalates to user when same findings recur (convergence failure)", async () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-review-conv-"));
+		try {
+			const planPath = path.join(tmpDir, "plan.md");
+			const planContent = "```superteam-tasks\n- title: T\n  description: D\n  files: [a.ts]\n```";
+			fs.writeFileSync(planPath, planContent);
+
+			mockDiscoverAgents.mockReturnValue({
+				agents: [makeAgent("architect"), makeAgent("planner")],
+				projectAgentsDir: null,
+			});
+			mockDispatchAgent.mockImplementation(async (agent) => {
+				if (agent.name === "planner") fs.writeFileSync(planPath, planContent);
+				return makeDispatchResult(agent.name);
+			});
+			// Always returns same failure findings
+			mockGetFinalOutput.mockReturnValue(failReviewJson("Same issue every time"));
+
+			const ctx = makeCtx(tmpDir);
+			// Convergence escalation: "Approve as-is" to break out
+			ctx.ui.select
+				.mockResolvedValueOnce("Approve as-is")   // convergence escalation
+				.mockResolvedValueOnce("Approve");         // final approval
+			const state = makeStateWithPlan({
+				config: { tddMode: "tdd", reviewMode: "iterative", maxPlanReviewCycles: 5, maxTaskReviewCycles: 3 },
+				planPath,
+			} as any);
+
+			const result = await runPlanReviewPhase(state, ctx);
+
+			// Should have shown convergence escalation (at cycle 2, same findings)
+			const selectCalls = ctx.ui.select.mock.calls;
+			expect(selectCalls[0][0]).toContain("converging");
+			expect(result.phase).toBe("configure");
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses targeted revision prompt instead of full rewrite", async () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-review-targeted-"));
+		try {
+			const planPath = path.join(tmpDir, "plan.md");
+			const planContent = "```superteam-tasks\n- title: T\n  description: D\n  files: [a.ts]\n```";
+			fs.writeFileSync(planPath, planContent);
+
+			mockDiscoverAgents.mockReturnValue({
+				agents: [makeAgent("architect"), makeAgent("planner")],
+				projectAgentsDir: null,
+			});
+			mockDispatchAgent.mockImplementation(async (agent) => {
+				if (agent.name === "planner") fs.writeFileSync(planPath, planContent);
+				return makeDispatchResult(agent.name);
+			});
+			mockGetFinalOutput
+				.mockReturnValueOnce(failReviewJson("Missing error handling"))
+				.mockReturnValueOnce(passReviewJson());
+
+			const ctx = makeCtx(tmpDir);
+			ctx.ui.select.mockResolvedValue("Approve");
+			const state = makeStateWithPlan({
+				config: { tddMode: "tdd", reviewMode: "iterative", maxPlanReviewCycles: 3, maxTaskReviewCycles: 3 },
+				planPath,
+			} as any);
+
+			await runPlanReviewPhase(state, ctx);
+
+			// The planner dispatch should use targeted prompt (contains "Targeted edits only")
+			const plannerCalls = mockDispatchAgent.mock.calls.filter(c => c[0].name === "planner");
+			expect(plannerCalls.length).toBeGreaterThanOrEqual(1);
+			expect(plannerCalls[0][1]).toContain("Targeted edits only");
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("re-dispatches reviewer when hasWriteToolCalls returns true", async () => {
+		const mockHasWriteToolCalls = vi.mocked(hasWriteToolCalls);
+		mockDiscoverAgents.mockReturnValue({
+			agents: [makeAgent("architect"), makeAgent("planner")],
+			projectAgentsDir: null,
+		});
+		mockDispatchAgent.mockResolvedValue(makeDispatchResult("architect"));
+		mockGetFinalOutput.mockReturnValue(passReviewJson());
+
+		// First call: has writes, second call (re-dispatch): no writes
+		mockHasWriteToolCalls
+			.mockReturnValueOnce(true)
+			.mockReturnValue(false);
+
+		const ctx = makeCtx();
+		ctx.ui.select.mockResolvedValue("Approve");
+		const state = makeStateWithPlan();
+		await runPlanReviewPhase(state, ctx);
+
+		// Should have been dispatched twice for the same reviewer (original + re-dispatch)
+		const reviewerCalls = mockDispatchAgent.mock.calls.filter(c => c[0].name === "architect");
+		expect(reviewerCalls).toHaveLength(2);
+		expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("write operations"), "warning");
 	});
 
 	it("passes signal to dispatch calls", async () => {

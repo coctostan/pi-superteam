@@ -13,7 +13,8 @@ Pi extension package: multi-agent orchestration, TDD enforcement, review cycles.
 - `src/review-parser.ts` — structured review output parser
 - `src/rules/engine.ts` — rule evaluation (TDD, YAGNI)
 - `src/workflow/` — `/workflow` command: brainstorm → plan → review → configure → execute → finalize
-  - `orchestrator.ts` — state machine; `state.ts` — types/serialization
+  - `orchestrator.ts` — state machine; `state.ts` — types/serialization (plan parsing delegated to plan-parser.ts)
+  - `plan-parser.ts` — pure plan parsing logic (extracted from state.ts)
   - `phases/` — one file per phase
   - `prompt-builder.ts`, `interaction.ts`, `progress.ts`, `git-utils.ts`, `ui.ts`
 - `agents/` — markdown agent personas (scout, implementer, architect, planner, brainstormer, reviewers)

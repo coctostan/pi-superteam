@@ -8,6 +8,7 @@ vi.mock("../../dispatch.js", () => ({
 	dispatchParallel: vi.fn(),
 	getFinalOutput: vi.fn(),
 	checkCostBudget: vi.fn(),
+	hasWriteToolCalls: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("../orchestrator-state.js", async (importOriginal) => {
@@ -30,7 +31,7 @@ vi.mock("../../config.js", () => ({
 	getConfig: vi.fn(),
 }));
 
-import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget } from "../../dispatch.ts";
+import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, hasWriteToolCalls } from "../../dispatch.ts";
 import { saveState } from "../orchestrator-state.ts";
 import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.ts";
 import { parseReviewOutput, hasCriticalFindings } from "../../review-parser.ts";
@@ -826,6 +827,28 @@ describe("runExecutePhase", () => {
 		it("returns failure for a nonexistent command", async () => {
 			const result = await runValidation("nonexistent_command_xyz_12345", "/tmp");
 			expect(result.success).toBe(false);
+		});
+	});
+
+	// --- Reviewer write-guard ---
+
+	describe("reviewer write-guard", () => {
+		it("re-dispatches reviewer when hasWriteToolCalls returns true", async () => {
+			setupDefaultMocks();
+			const mockHasWrite = vi.mocked(hasWriteToolCalls);
+			// First review call has writes, re-dispatch is clean
+			mockHasWrite
+				.mockReturnValueOnce(true)
+				.mockReturnValue(false);
+
+			const ctx = makeCtx();
+			const state = makeState();
+			const result = await runExecutePhase(state, ctx);
+
+			// Reviewer should have been dispatched twice for spec review (original + re-dispatch)
+			const reviewerCalls = mockDispatchAgent.mock.calls.filter(c => c[0].name === "spec-reviewer");
+			expect(reviewerCalls).toHaveLength(2);
+			expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("write operations"), "warning");
 		});
 	});
 });

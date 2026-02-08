@@ -62,6 +62,12 @@ export interface SuperteamConfig {
 	agents: AgentConfig;
 	costs: CostConfig;
 	validationCommand: string;
+	// v0.3 additions
+	testCommand: string;
+	validationCadence: "every" | "every-N" | "on-demand";
+	validationInterval: number;
+	budgetCheckpointUsd: number;
+	gitIgnorePatterns: string[];
 }
 
 // --- Defaults ---
@@ -99,6 +105,12 @@ const DEFAULT_CONFIG: SuperteamConfig = {
 		hardLimitUsd: 20.0,
 	},
 	validationCommand: "tsc --noEmit",
+	// v0.3 additions
+	testCommand: "",
+	validationCadence: "every",
+	validationInterval: 3,
+	budgetCheckpointUsd: 0,
+	gitIgnorePatterns: [],
 };
 
 // --- Discovery ---
