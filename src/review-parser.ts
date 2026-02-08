@@ -5,6 +5,12 @@
  * Inconclusive → escalate, never crash, never guess.
  */
 
+import {
+	extractFencedBlock,
+	extractLastBraceBlock,
+	sanitizeJsonNewlines,
+} from "./parse-utils.js";
+
 // --- Types ---
 
 export interface ReviewFinding {
@@ -39,7 +45,7 @@ export type ParseResult =
  */
 export function parseReviewOutput(rawOutput: string): ParseResult {
 	// Try fenced block first
-	const fenced = extractFencedBlock(rawOutput);
+	const fenced = extractFencedBlock(rawOutput, "superteam-json");
 	if (fenced) {
 		return parseAndValidate(fenced, rawOutput);
 	}
@@ -57,59 +63,11 @@ export function parseReviewOutput(rawOutput: string): ParseResult {
 	};
 }
 
-function extractFencedBlock(text: string): string | null {
-	// Match ```superteam-json ... ``` with flexible whitespace
-	const regex = /```superteam-json\s*\n([\s\S]*?)```/;
-	const match = text.match(regex);
-	return match ? match[1].trim() : null;
-}
-
-function extractLastBraceBlock(text: string): string | null {
-	// Find the last top-level {...} block
-	let depth = 0;
-	let lastStart = -1;
-	let lastEnd = -1;
-	let inString = false;
-	let escape = false;
-
-	for (let i = 0; i < text.length; i++) {
-		const ch = text[i];
-
-		if (escape) {
-			escape = false;
-			continue;
-		}
-		if (ch === "\\") {
-			escape = true;
-			continue;
-		}
-		if (ch === '"') {
-			inString = !inString;
-			continue;
-		}
-		if (inString) continue;
-
-		if (ch === "{") {
-			if (depth === 0) lastStart = i;
-			depth++;
-		} else if (ch === "}") {
-			depth--;
-			if (depth === 0 && lastStart >= 0) {
-				lastEnd = i;
-			}
-		}
-	}
-
-	if (lastStart >= 0 && lastEnd > lastStart) {
-		return text.slice(lastStart, lastEnd + 1);
-	}
-	return null;
-}
-
 function parseAndValidate(jsonStr: string, rawOutput: string): ParseResult {
+	const sanitized = sanitizeJsonNewlines(jsonStr);
 	let parsed: any;
 	try {
-		parsed = JSON.parse(jsonStr);
+		parsed = JSON.parse(sanitized);
 	} catch (e: any) {
 		return {
 			status: "inconclusive",
