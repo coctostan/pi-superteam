@@ -12,13 +12,16 @@ export interface TestResult {
   output?: string;
 }
 
+// Strip ANSI escape sequences (color codes, cursor movements, etc.)
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
 // Match: " ✓ test name (Nms)" or " ✗ test name (Nms)" or " × test name (Nms)"
 const TEST_LINE_RE = /^\s*([✓✗×])\s+(.+?)(?:\s+\((\d+)ms\))?\s*$/;
 // Match: "   → error text"
 const ERROR_LINE_RE = /^\s+→\s+(.+)$/;
 
 export function parseTestOutput(output: string): TestResult[] {
-  const lines = output.split("\n");
+  const lines = output.replace(ANSI_RE, "").split("\n");
   const results: TestResult[] = [];
   let currentFailOutput: string[] = [];
   let lastResult: TestResult | null = null;

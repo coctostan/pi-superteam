@@ -192,8 +192,36 @@ export async function runExecutePhase(
 						const revalCommand = revalConfig.validationCommand || "";
 						const revalResult = revalCommand ? await runValidation(revalCommand, ctx.cwd) : { success: true };
 						if (!revalResult.success) {
-							resolveFailureAction("validation-failure");
-							const reason = `Validation still failing after auto-fix: ${revalResult.error || "command exited with non-zero"}`;
+							const valAction = resolveFailureAction("validation-failure");
+							if (valAction === "warn-continue") {
+								ui?.notify?.(`Validation still failing after auto-fix: ${revalResult.error || "command exited with non-zero"}`, "warning");
+							} else if (valAction === "ignore") {
+								// Skip escalation
+							} else {
+								const reason = `Validation still failing after auto-fix: ${revalResult.error || "command exited with non-zero"}`;
+								const escalation = await escalate(task, reason, ui, ctx.cwd);
+								if (escalation === "abort") {
+									state.error = "Aborted by user";
+									saveState(state, ctx.cwd);
+									return state;
+								}
+								if (escalation === "skip") {
+									task.status = "skipped";
+									saveState(state, ctx.cwd);
+									continue;
+								}
+								task.status = "pending";
+								continue;
+							}
+						}
+					} else {
+						const valAction = resolveFailureAction("validation-failure");
+						if (valAction === "warn-continue") {
+							ui?.notify?.(`Validation failed: ${valResult.error || "command exited with non-zero"}`, "warning");
+						} else if (valAction === "ignore") {
+							// Skip escalation
+						} else {
+							const reason = `Validation failed: ${valResult.error || "command exited with non-zero"}`;
 							const escalation = await escalate(task, reason, ui, ctx.cwd);
 							if (escalation === "abort") {
 								state.error = "Aborted by user";
@@ -205,22 +233,6 @@ export async function runExecutePhase(
 								saveState(state, ctx.cwd);
 								continue;
 							}
-							task.status = "pending";
-							continue;
-						}
-					} else {
-						resolveFailureAction("validation-failure");
-						const reason = `Validation failed: ${valResult.error || "command exited with non-zero"}`;
-						const escalation = await escalate(task, reason, ui, ctx.cwd);
-						if (escalation === "abort") {
-							state.error = "Aborted by user";
-							saveState(state, ctx.cwd);
-							return state;
-						}
-						if (escalation === "skip") {
-							task.status = "skipped";
-							saveState(state, ctx.cwd);
-							continue;
 						}
 						task.status = "pending";
 						continue;
@@ -337,7 +349,11 @@ export async function runExecutePhase(
 								saveState(state, ctx.cwd);
 								continue;
 							}
+							// Reset index so the task is retried
 							task.status = "pending";
+							state.currentTaskIndex = i;
+							i--;
+							saveState(state, ctx.cwd);
 							continue;
 						}
 					}

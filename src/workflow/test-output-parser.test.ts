@@ -70,6 +70,16 @@ describe("parseTestOutput", () => {
     expect(results[0].duration).toBeUndefined();
   });
 
+  it("strips ANSI color codes before parsing", () => {
+    const output = " \x1b[32m✓\x1b[39m src/a.test.ts > works (2ms)\n \x1b[31m✗\x1b[39m src/b.test.ts > fails (1ms)\n   → \x1b[31merror msg\x1b[39m";
+    const results = parseTestOutput(output);
+    expect(results).toHaveLength(2);
+    expect(results[0].passed).toBe(true);
+    expect(results[0].name).toBe("src/a.test.ts > works");
+    expect(results[1].passed).toBe(false);
+    expect(results[1].output).toBe("error msg");
+  });
+
   it("captures multi-line failure output up to next test line", () => {
     const output = [
       " ✗ src/x.test.ts > complex fail (5ms)",

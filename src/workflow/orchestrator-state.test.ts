@@ -239,7 +239,7 @@ describe("orchestrator-state", () => {
 
     it("testBaseline round-trips through save/load", () => {
       const state = createInitialState("test");
-      (state as any).testBaseline = {
+      state.testBaseline = {
         capturedAt: 1700000000000,
         sha: "abc123",
         command: "npx vitest run",

@@ -78,6 +78,7 @@ export async function captureBaseline(
     const result = await execFile("bash", ["-c", testCommand], {
       cwd,
       timeout: 120_000,
+      maxBuffer: 10 * 1024 * 1024, // 10MB — large test suites produce verbose output
     });
     stdout = result.stdout;
     stderr = result.stderr;
