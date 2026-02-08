@@ -271,7 +271,8 @@ export function resolveAgentThinking(agent: AgentProfile, config: SuperteamConfi
 	return config.agents.thinkingOverrides[agent.name] ?? agent.thinking ?? undefined;
 }
 
-function buildSubprocessArgs(agent: AgentProfile, cwd: string): string[] {
+/** @internal — exported for testing */
+export function buildSubprocessArgs(agent: AgentProfile, cwd: string): string[] {
 	const config = getConfig(cwd);
 	const packageDir = getPackageDir();
 
@@ -297,6 +298,12 @@ function buildSubprocessArgs(agent: AgentProfile, cwd: string): string[] {
 		const skillPath = path.join(packageDir, "skills", "test-driven-development", "SKILL.md");
 		if (fs.existsSync(extensionPath)) args.push("-e", extensionPath);
 		if (fs.existsSync(skillPath)) args.push("--skill", skillPath);
+	}
+
+	// Inject .pi/context.md if it exists in the project
+	const contextMdPath = path.join(cwd, ".pi", "context.md");
+	if (fs.existsSync(contextMdPath)) {
+		args.push("--append-system-prompt", path.resolve(cwd, ".pi", "context.md"));
 	}
 
 	return args;

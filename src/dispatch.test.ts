@@ -15,6 +15,7 @@ import {
 	resolveAgentModel,
 	resolveAgentThinking,
 	discoverAgents,
+	buildSubprocessArgs,
 	type AgentProfile,
 } from "./dispatch.ts";
 
@@ -222,6 +223,49 @@ function writeAgentFileAt(dir: string, name: string, frontmatter: Record<string,
 	const content = `---\n${fm}\n---\n${body}`;
 	fs.writeFileSync(path.join(dir, `${name}.md`), content);
 }
+
+describe("buildSubprocessArgs — context.md injection", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dispatch-ctx-"));
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("appends --append-system-prompt when .pi/context.md exists", () => {
+		const piDir = path.join(tmpDir, ".pi");
+		fs.mkdirSync(piDir, { recursive: true });
+		fs.writeFileSync(path.join(piDir, "context.md"), "# Project Context\nTypeScript ESM project");
+
+		const agent = makeAgent({ name: "scout" });
+		const args = buildSubprocessArgs(agent, tmpDir);
+
+		expect(args).toContain("--append-system-prompt");
+		const flagIdx = args.indexOf("--append-system-prompt");
+		expect(args[flagIdx + 1]).toBe(path.resolve(tmpDir, ".pi", "context.md"));
+	});
+
+	it("does not append --append-system-prompt when .pi/context.md does not exist", () => {
+		const agent = makeAgent({ name: "scout" });
+		const args = buildSubprocessArgs(agent, tmpDir);
+
+		expect(args).not.toContain("--append-system-prompt");
+	});
+
+	it("appends --append-system-prompt for non-implementer agents too", () => {
+		const piDir = path.join(tmpDir, ".pi");
+		fs.mkdirSync(piDir, { recursive: true });
+		fs.writeFileSync(path.join(piDir, "context.md"), "context");
+
+		const agent = makeAgent({ name: "spec-reviewer" });
+		const args = buildSubprocessArgs(agent, tmpDir);
+
+		expect(args).toContain("--append-system-prompt");
+	});
+});
 
 describe("new agent profiles", () => {
   it("brainstormer agent exists with read-only tools", () => {
