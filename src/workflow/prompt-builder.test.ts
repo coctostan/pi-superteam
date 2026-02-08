@@ -48,7 +48,7 @@ function makeFindings(overrides: Partial<ReviewFindings> = {}): ReviewFindings {
 	};
 }
 
-// --- buildScoutPrompt ---
+// --- buildScoutPrompt (narrowed) ---
 
 describe("buildScoutPrompt", () => {
 	it("includes cwd path", () => {
@@ -56,16 +56,22 @@ describe("buildScoutPrompt", () => {
 		expect(result).toContain("/my/project");
 	});
 
-	it("asks for key files, tech stack, directory structure", () => {
+	it("instructs to read .pi/context.md if present", () => {
 		const result = buildScoutPrompt("/proj");
-		expect(result).toContain("key files");
-		expect(result).toContain("tech stack");
-		expect(result).toContain("directory structure");
+		expect(result).toContain("context.md");
 	});
 
-	it("asks for structured summary", () => {
+	it("asks for tech stack, directory layout, key entry points, test conventions", () => {
 		const result = buildScoutPrompt("/proj");
-		expect(result).toContain("structured summary");
+		expect(result).toMatch(/tech stack/i);
+		expect(result).toMatch(/directory/i);
+		expect(result).toMatch(/entry point/i);
+		expect(result).toMatch(/test convention/i);
+	});
+
+	it("limits output to 500 words", () => {
+		const result = buildScoutPrompt("/proj");
+		expect(result).toContain("500 words");
 	});
 });
 

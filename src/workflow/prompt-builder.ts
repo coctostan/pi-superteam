@@ -14,9 +14,9 @@ import { formatFindings } from "../review-parser.js";
 
 export function buildScoutPrompt(cwd: string): string {
 	return [
-		`Explore the project at ${cwd}.`,
-		`List key files, tech stack, directory structure, and conventions.`,
-		`Be brief. Output a structured summary.`,
+		`Read .pi/context.md if present in ${cwd}.`,
+		`Summarize: tech stack, directory layout (3 levels), key entry points, test conventions.`,
+		`Max 500 words.`,
 	].join("\n");
 }
 
