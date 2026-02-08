@@ -46,5 +46,8 @@ Add explicit instruction to `buildSpecReviewPrompt()`: verify that implementatio
 ## 14. Remove duplicate review output format from prompt-builder
 `REVIEW_OUTPUT_FORMAT` in `prompt-builder.ts` duplicates the `superteam-json` format instructions already in each reviewer's agent markdown (system prompt). Remove from prompt-builder — agent markdown is authoritative and always present, even for direct `team` dispatch. Saves ~150 tokens per review call.
 
-## 15. Add bash to security-reviewer tools
+## 15. Execute phase agent visibility
+The activity stream shows file operations but not which agent is running, what model, or which task it's working on. The task list widget shows status but no way to drill into agent output. Add: current agent name + model in status bar during dispatch, task title alongside activity stream, and ability to expand a task to see its agent output.
+
+## 16. Add bash to security-reviewer tools
 `security-reviewer.md` currently has `read,grep,find,ls`. Add `bash` so it can run `npm audit`, check file permissions, inspect git history for leaked secrets. Other reviewers stay read-only.

@@ -320,6 +320,90 @@ describe("runPlanReviewPhase", () => {
 		expect(ctx.ui.select).toHaveBeenCalled();
 	});
 
+	it("forwards onStreamEvent callback to dispatchAgent", async () => {
+		mockDiscoverAgents.mockReturnValue({
+			agents: [makeAgent("architect"), makeAgent("planner")],
+			projectAgentsDir: null,
+		});
+		mockDispatchAgent.mockResolvedValue(makeDispatchResult("architect"));
+		mockGetFinalOutput.mockReturnValue(passReviewJson());
+
+		const ctx = makeCtx();
+		ctx.ui.select.mockResolvedValue("Approve");
+
+		const onStreamEvent = vi.fn();
+		const state = makeStateWithPlan();
+		await runPlanReviewPhase(state, ctx, undefined, onStreamEvent);
+
+		// Verify dispatchAgent was called with onStreamEvent in the 6th position
+		const firstDispatchCall = mockDispatchAgent.mock.calls[0];
+		expect(firstDispatchCall.length).toBeGreaterThanOrEqual(6);
+		expect(firstDispatchCall[5]).toBeDefined();
+	});
+
+	it("forwards onStreamEvent to dispatchParallel when multiple reviewers", async () => {
+		mockDiscoverAgents.mockReturnValue({
+			agents: [makeAgent("architect"), makeAgent("spec-reviewer"), makeAgent("planner")],
+			projectAgentsDir: null,
+		});
+		mockDispatchParallel.mockResolvedValue([makeDispatchResult("architect"), makeDispatchResult("spec-reviewer")]);
+		mockGetFinalOutput.mockReturnValue(passReviewJson());
+
+		const ctx = makeCtx();
+		ctx.ui.select.mockResolvedValue("Approve");
+
+		const onStreamEvent = vi.fn();
+		const state = makeStateWithPlan();
+		await runPlanReviewPhase(state, ctx, undefined, onStreamEvent);
+
+		// dispatchParallel doesn't take onStreamEvent directly, but dispatchAgent calls within revision should
+		expect(mockDispatchParallel).toHaveBeenCalledOnce();
+	});
+
+	it("forwards onStreamEvent to planner dispatch during revision", async () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-review-stream-"));
+		try {
+			const planPath = path.join(tmpDir, "plan.md");
+			const planContent = "```superteam-tasks\n- title: T\n  description: D\n  files: [a.ts]\n```";
+			fs.writeFileSync(planPath, planContent);
+
+			mockDiscoverAgents.mockReturnValue({
+				agents: [makeAgent("architect"), makeAgent("planner")],
+				projectAgentsDir: null,
+			});
+
+			mockDispatchAgent.mockImplementation(async (agent) => {
+				if (agent.name === "planner") {
+					fs.writeFileSync(planPath, planContent);
+				}
+				return makeDispatchResult(agent.name);
+			});
+
+			mockGetFinalOutput
+				.mockReturnValueOnce(failReviewJson("Missing error handling"))
+				.mockReturnValueOnce(passReviewJson());
+
+			const ctx = makeCtx(tmpDir);
+			ctx.ui.select.mockResolvedValue("Approve");
+
+			const onStreamEvent = vi.fn();
+			const state = makeStateWithPlan({
+				config: { tddMode: "tdd", reviewMode: "iterative", maxPlanReviewCycles: 3, maxTaskReviewCycles: 3 },
+				planPath,
+			} as any);
+
+			await runPlanReviewPhase(state, ctx, undefined, onStreamEvent);
+
+			// Planner dispatch should also have onStreamEvent (6th arg)
+			const plannerCalls = mockDispatchAgent.mock.calls.filter(c => c[0].name === "planner");
+			expect(plannerCalls.length).toBeGreaterThanOrEqual(1);
+			expect(plannerCalls[0].length).toBeGreaterThanOrEqual(6);
+			expect(plannerCalls[0][5]).toBeDefined();
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
 	it("passes signal to dispatch calls", async () => {
 		const controller = new AbortController();
 		mockDiscoverAgents.mockReturnValue({

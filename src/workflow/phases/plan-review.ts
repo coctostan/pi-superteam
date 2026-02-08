@@ -7,9 +7,10 @@ import * as fs from "node:fs";
 import type { OrchestratorState } from "../orchestrator-state.js";
 import { saveState } from "../orchestrator-state.js";
 import { buildPlanReviewPrompt, buildPlanRevisionPromptFromFindings } from "../prompt-builder.js";
-import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput } from "../../dispatch.js";
+import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, type OnStreamEvent } from "../../dispatch.js";
 import { parseReviewOutput, formatFindings } from "../../review-parser.js";
 import { parseTaskBlock, parseTaskHeadings } from "../state.js";
+import { formatToolAction, createActivityBuffer } from "../ui.js";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AgentProfile, DispatchResult } from "../../dispatch.js";
 import type { ParseResult } from "../../review-parser.js";
@@ -20,6 +21,7 @@ export async function runPlanReviewPhase(
 	state: OrchestratorState,
 	ctx: Ctx,
 	signal?: AbortSignal,
+	onStreamEvent?: OnStreamEvent,
 ): Promise<OrchestratorState> {
 	const ui = (ctx as any).ui;
 	const { agents } = discoverAgents(ctx.cwd, true);
@@ -35,13 +37,27 @@ export async function runPlanReviewPhase(
 	const maxCycles = state.config.maxPlanReviewCycles ?? 3;
 	const designContent = state.designContent || "";
 
+	// Activity buffer for streaming
+	const activityBuffer = createActivityBuffer(10);
+	const makeOnStreamEvent = (): OnStreamEvent => {
+		return (event) => {
+			if (event.type === "tool_execution_start") {
+				const action = formatToolAction(event);
+				activityBuffer.push(action);
+				ui?.setStatus?.("workflow", action);
+				ui?.setWidget?.("workflow-activity", activityBuffer.lines());
+			}
+			onStreamEvent?.(event);
+		};
+	};
+
 	// Review loop
 	if (availableReviewers.length > 0) {
 		while (true) {
 			ui?.setStatus?.("workflow", "⚡ Workflow: plan-review");
 
 			const reviewResults = await dispatchReviewers(
-				availableReviewers, state.planContent!, designContent, ctx.cwd, signal,
+				availableReviewers, state.planContent!, designContent, ctx.cwd, signal, makeOnStreamEvent(),
 			);
 
 			const parsed: ParseResult[] = reviewResults.map((r) =>
@@ -59,7 +75,7 @@ export async function runPlanReviewPhase(
 			if (canIterate) {
 				// Dispatch planner to revise
 				const revisionPrompt = buildPlanRevisionPromptFromFindings(state.planContent!, designContent, findings);
-				await dispatchAgent(planner!, revisionPrompt, ctx.cwd, signal);
+				await dispatchAgent(planner!, revisionPrompt, ctx.cwd, signal, undefined, makeOnStreamEvent());
 
 				// Re-read plan from disk
 				try {
@@ -107,7 +123,7 @@ export async function runPlanReviewPhase(
 		const feedback = await ui?.editor?.("Enter revision feedback");
 		if (feedback && planner) {
 			const revisionPrompt = buildPlanRevisionPromptFromFindings(state.planContent!, designContent, feedback);
-			await dispatchAgent(planner, revisionPrompt, ctx.cwd, signal);
+			await dispatchAgent(planner, revisionPrompt, ctx.cwd, signal, undefined, makeOnStreamEvent());
 
 			// Re-read plan
 			try {
@@ -131,7 +147,7 @@ export async function runPlanReviewPhase(
 		}
 
 		// Re-run reviews (recursive)
-		return runPlanReviewPhase(state, ctx, signal);
+		return runPlanReviewPhase(state, ctx, signal, onStreamEvent);
 	}
 
 	// Abort or cancel
@@ -146,11 +162,12 @@ async function dispatchReviewers(
 	designContent: string,
 	cwd: string,
 	signal?: AbortSignal,
+	onStreamEvent?: OnStreamEvent,
 ): Promise<DispatchResult[]> {
 	if (reviewers.length === 1) {
 		const { agent, reviewType } = reviewers[0];
 		const prompt = buildPlanReviewPrompt(planContent, reviewType, designContent);
-		const result = await dispatchAgent(agent, prompt, cwd, signal);
+		const result = await dispatchAgent(agent, prompt, cwd, signal, undefined, onStreamEvent);
 		return [result];
 	}
 
