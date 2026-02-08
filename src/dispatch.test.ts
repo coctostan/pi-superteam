@@ -267,6 +267,14 @@ describe("buildSubprocessArgs — context.md injection", () => {
 	});
 });
 
+describe("security-reviewer agent profile", () => {
+  it("includes bash in tools frontmatter", () => {
+    const agentsDir = path.resolve(import.meta.dirname, "../agents");
+    const content = fs.readFileSync(path.join(agentsDir, "security-reviewer.md"), "utf-8");
+    expect(content).toMatch(/^tools:.*bash/m);
+  });
+});
+
 describe("new agent profiles", () => {
   it("brainstormer agent exists with read-only tools", () => {
     const { agents } = discoverAgents(process.cwd(), false);
