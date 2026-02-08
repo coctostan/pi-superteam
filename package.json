@@ -1,6 +1,6 @@
 {
   "name": "pi-superteam",
-  "version": "0.1.1",
+  "version": "0.2.1",
   "description": "Multi-agent orchestration, TDD enforcement, iterative review cycles, and context-aware rules for pi",
   "keywords": [
     "pi-package",
