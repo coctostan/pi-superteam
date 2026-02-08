@@ -1,12 +1,8 @@
 # Future Plans
 
-Living document. Items triaged 2026-02-08. Active batch in `docs/plans/next-batch.md`.
+Living document. Items triaged 2026-02-08.
 
----
-
-## Now
-
-See `docs/plans/next-batch.md` for the current ATDD batch (11 items).
+Versioned milestones (v0.3–v0.5) are in [ROADMAP.md](ROADMAP.md). This file tracks items that don't fit a near-term milestone.
 
 ---
 

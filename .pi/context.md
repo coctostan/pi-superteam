@@ -1,5 +1,7 @@
 # pi-superteam
 
+**Mission: S-tier output quality.** Every process decision — every phase, agent, review, and prompt — must answer one question: does this produce higher-quality results? We don't skip steps to save time; we skip steps that don't improve the work. Quality first, then cost, then speed.
+
 Pi extension package: multi-agent orchestration, TDD enforcement, review cycles.
 
 ## Structure

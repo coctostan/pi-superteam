@@ -131,6 +131,15 @@ Use {previous} to pass scout's findings.
 
 A deterministic state machine that drives the full development pipeline — agents do creative work, the orchestrator controls flow.
 
+```mermaid
+flowchart LR
+    BS[Brainstorm] --> PW[Plan Write]
+    PW --> PR[Plan Review]
+    PR --> CF[Configure]
+    CF --> EX[Execute]
+    EX --> FN[Finalize]
+```
+
 ```
 /workflow <description>    Start a new orchestrated workflow
 /workflow                  Resume an in-progress workflow
@@ -191,6 +200,17 @@ Automated implement → review → fix loops for individual tasks:
 5. ⚡ **Performance review** — identifies bottlenecks (optional, parallel)
 6. 🔧 **Fix loop** — on failure, re-dispatches implementer with specific findings
 7. 🚨 **Escalation** — after max retries, asks you for help
+
+```mermaid
+stateDiagram-v2
+    [*] --> Implement
+    Implement --> Review
+    Review --> Done: Pass
+    Review --> Fix: Findings
+    Fix --> Review: Retry
+    Fix --> Escalate: Max retries
+    Done --> [*]
+```
 
 Reviews return structured JSON — no LLM needed to interpret results:
 ````
