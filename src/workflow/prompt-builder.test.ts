@@ -231,6 +231,12 @@ describe("buildSpecReviewPrompt", () => {
 		const result = buildSpecReviewPrompt(makeTask(), ["src/widget.ts"]);
 		expect(result).toMatch(/do\s+NOT\s+trust/i);
 	});
+
+	it("includes instruction to only review listed files, not test files unless targeted", () => {
+		const task = makeTask();
+		const result = buildSpecReviewPrompt(task, ["src/widget.ts"]);
+		expect(result).toContain("do not review test files unless the task description explicitly targets test code");
+	});
 });
 
 // --- buildQualityReviewPrompt ---

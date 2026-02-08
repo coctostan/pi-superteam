@@ -129,6 +129,7 @@ export function buildSpecReviewPrompt(task: TaskExecState, changedFiles: string[
 		`### Files to read`,
 		changedFiles.map((f) => `- ${f}`).join("\n"),
 		``,
+		`Only review files listed below — do not review test files unless the task description explicitly targets test code.`,
 		`Read these files. Compare implementation against spec.`,
 		`Do NOT trust the implementer's self-report — verify independently.`,
 		].join("\n");
