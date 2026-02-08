@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { describe, it, expect } from "vitest";
 import {
 	buildScoutPrompt,
@@ -141,19 +143,6 @@ describe("buildPlanReviewPrompt", () => {
 		expect(result).toMatch(/independen/i);
 		expect(result).toMatch(/file.*coverage|coverage/i);
 	});
-
-	it("mandates superteam-json output", () => {
-		const result = buildPlanReviewPrompt("plan", "architect");
-		expect(result).toContain("superteam-json");
-	});
-
-	it("mentions passed/findings/mustFix/summary fields", () => {
-		const result = buildPlanReviewPrompt("plan", "spec");
-		expect(result).toContain("passed");
-		expect(result).toContain("findings");
-		expect(result).toContain("mustFix");
-		expect(result).toContain("summary");
-	});
 });
 
 // --- buildImplPrompt ---
@@ -242,11 +231,6 @@ describe("buildSpecReviewPrompt", () => {
 		const result = buildSpecReviewPrompt(makeTask(), ["src/widget.ts"]);
 		expect(result).toMatch(/do\s+NOT\s+trust/i);
 	});
-
-	it("mandates superteam-json output", () => {
-		const result = buildSpecReviewPrompt(makeTask(), ["src/widget.ts"]);
-		expect(result).toContain("superteam-json");
-	});
 });
 
 // --- buildQualityReviewPrompt ---
@@ -263,11 +247,6 @@ describe("buildQualityReviewPrompt", () => {
 		expect(result).toMatch(/dry/i);
 		expect(result).toMatch(/error handling/i);
 		expect(result).toMatch(/test quality/i);
-	});
-
-	it("mandates superteam-json output", () => {
-		const result = buildQualityReviewPrompt(makeTask(), ["src/widget.ts"]);
-		expect(result).toContain("superteam-json");
 	});
 });
 
@@ -290,10 +269,40 @@ describe("buildFinalReviewPrompt", () => {
 		expect(result).toContain("src/y.ts");
 		expect(result).toContain("src/z.ts");
 	});
+});
 
-	it("mandates superteam-json output", () => {
+// --- REVIEW_OUTPUT_FORMAT removal ---
+
+describe("REVIEW_OUTPUT_FORMAT removal", () => {
+	it("buildPlanReviewPrompt does not contain the duplicated IMPORTANT format instruction", () => {
+		const result = buildPlanReviewPrompt("plan content", "architect");
+		expect(result).not.toContain("IMPORTANT: You MUST end your response with");
+	});
+
+	it("buildSpecReviewPrompt does not contain the duplicated IMPORTANT format instruction", () => {
+		const task = makeTask();
+		const result = buildSpecReviewPrompt(task, ["src/a.ts"]);
+		expect(result).not.toContain("IMPORTANT: You MUST end your response with");
+	});
+
+	it("buildQualityReviewPrompt does not contain the duplicated IMPORTANT format instruction", () => {
+		const task = makeTask();
+		const result = buildQualityReviewPrompt(task, ["src/a.ts"]);
+		expect(result).not.toContain("IMPORTANT: You MUST end your response with");
+	});
+
+	it("buildFinalReviewPrompt does not contain the duplicated IMPORTANT format instruction", () => {
 		const result = buildFinalReviewPrompt([makeTask()], ["src/a.ts"]);
-		expect(result).toContain("superteam-json");
+		expect(result).not.toContain("IMPORTANT: You MUST end your response with");
+	});
+
+	it("all 5 reviewer agents contain superteam-json format in their .md", () => {
+		const agentFiles = ["architect", "spec-reviewer", "quality-reviewer", "security-reviewer", "performance-reviewer"];
+		const agentsDir = path.resolve(import.meta.dirname, "../../agents");
+		for (const name of agentFiles) {
+			const content = fs.readFileSync(path.join(agentsDir, name + ".md"), "utf-8");
+			expect(content).toContain("```superteam-json");
+		}
 	});
 });
 
