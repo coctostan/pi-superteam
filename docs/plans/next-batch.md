@@ -1,6 +1,6 @@
 # Next Batch — ATDD
 
-15 items. Full ATDD: acceptance tests first, then unit tests, then implementation.
+20 items. Full ATDD: acceptance tests first, then unit tests, then implementation.
 
 Items ordered by priority. #1 is the most impactful — every workflow phase feels broken without it.
 
@@ -49,5 +49,17 @@ Add explicit instruction to `buildSpecReviewPrompt()`: verify that implementatio
 ## 15. Execute phase agent visibility
 The activity stream shows file operations but not which agent is running, what model, or which task it's working on. The task list widget shows status but no way to drill into agent output. Add: current agent name + model in status bar during dispatch, task title alongside activity stream, and ability to expand a task to see its agent output.
 
-## 16. Add bash to security-reviewer tools
+## 16. Fix AT-7 brainstorm acceptance test
+`brainstorm.acceptance.test.ts` AT-7 fails because the brainstorm skip option (task 19) added a `ui.select` call after scout that the test doesn't mock. The flow short-circuits before reaching the design step. Add the missing mock so the test exercises all sub-steps again.
+
+## 17. Richer finalize report
+Current finalize output is bare: emoji task list, stats, reviewer summary, file list. Add: per-task cost breakdown, commit SHA per task, timeline (started/finished), total fix cycles, and a prose summary dispatched via a lightweight summarizer agent that reads task titles + changed files + design doc and writes 5-6 bullet points. Save report to `docs/plans/YYYY-MM-DD-<slug>-summary.md`.
+
+## 18. Post-workflow documentation update
+After finalize report, prompt user: "Update project documentation?" If yes, dispatch an agent that reads changed files + design doc + existing docs (README, CHANGELOG, .pi/context.md) and identifies what needs updating. Produces a checklist or does the updates directly. Build this as a reusable skill (`skills/documentation-update/`) so it works outside workflows too — e.g. "use the documentation-update skill to update docs after my changes."
+
+## 19. Workflow artifact cleanup
+`docs/plans/` accumulates stale design docs, plan revisions, progress files across workflow runs. After finalize: archive current workflow's artifacts (design, plan, progress, summary) into a dated subfolder (`docs/plans/archive/YYYY-MM-DD-<slug>/`), and offer to squash workflow commits into a single merge commit with a comprehensive message.
+
+## 20. Add bash to security-reviewer tools
 `security-reviewer.md` currently has `read,grep,find,ls`. Add `bash` so it can run `npm audit`, check file permissions, inspect git history for leaked secrets. Other reviewers stay read-only.

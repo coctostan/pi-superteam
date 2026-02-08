@@ -1,6 +1,6 @@
 # Workflow: superteam/docs/plans/next-batch.md
 
-**Phase:** Execute | **Cost:** $46.18
+**Phase:** Done | **Cost:** $59.45
 
 ## Brainstorm
 
@@ -29,9 +29,9 @@
 - [x] 15. Add validation gate before reviews in execute.ts
 - [x] 16. Add onStreamEvent wiring to brainstorm phase
 - [x] 17. Add onStreamEvent wiring to plan-write phase
-- [ ] 18. Add onStreamEvent wiring to plan-review phase *(implementing)*
-- [ ] 19. Add brainstorm skip option
-- [ ] 20. Add plan file path fallback in plan-write.ts
+- [x] 18. Add onStreamEvent wiring to plan-review phase
+- [x] 19. Add brainstorm skip option
+- [x] 20. Add plan file path fallback in plan-write.ts
 
 ## Configuration
 
