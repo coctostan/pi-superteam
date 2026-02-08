@@ -53,8 +53,19 @@ export async function runBrainstormPhase(
 		};
 	};
 
-	// Sub-step: scout
+	// Sub-step: scout (with skip option)
 	if (state.brainstorm.step === "scout") {
+		const skipChoice = await ui?.select?.("Brainstorm explores design options before planning. Continue?", [
+			"Start brainstorm",
+			"Skip brainstorm",
+		]);
+
+		if (skipChoice === "Skip brainstorm") {
+			state.brainstorm.step = "done";
+			state.phase = "plan-write";
+			return state;
+		}
+
 		ui?.setStatus?.("workflow", formatStatus(state));
 		const result = await dispatchAgent(scoutAgent, buildScoutPrompt(ctx.cwd), ctx.cwd, signal, undefined, makeOnStreamEvent());
 		state.totalCostUsd += result.usage.cost;

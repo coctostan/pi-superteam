@@ -1,4 +1,4 @@
-// src/workflow/phases/brainstorm.test.ts — onStreamEvent wiring
+// src/workflow/phases/brainstorm.test.ts — brainstorm skip option + onStreamEvent wiring
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -307,6 +307,66 @@ describe("runBrainstormPhase", () => {
 
     expect(result.phase).toBe("brainstorm"); // did not advance
     expect(result.error).toBeUndefined();
+  });
+
+  it("offers skip option before scout and skips to plan-write when selected", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+
+    // User selects "Skip brainstorm"
+    ctx.ui.select.mockResolvedValueOnce("Skip brainstorm");
+
+    const state = makeState();
+    const result = await runBrainstormPhase(state, ctx);
+
+    expect(result.phase).toBe("plan-write");
+    expect(result.brainstorm.step).toBe("done");
+    // Scout should NOT have been dispatched
+    expect(mockDispatchAgent).not.toHaveBeenCalled();
+  });
+
+  it("proceeds with brainstorm when user selects 'Start brainstorm'", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("scout output");
+    mockParseBrainstorm.mockReturnValue({
+      status: "ok",
+      data: { type: "questions", questions: [{ id: "q1", text: "Q?", type: "input" }] },
+    } as any);
+
+    // User selects "Start brainstorm", then cancels at first question
+    ctx.ui.select.mockResolvedValueOnce("Start brainstorm");
+    ctx.ui.input.mockResolvedValue(undefined);
+
+    const state = makeState();
+    const result = await runBrainstormPhase(state, ctx);
+
+    // Scout should have been dispatched
+    expect(mockDispatchAgent).toHaveBeenCalled();
+    expect(mockDispatchAgent.mock.calls[0][0].name).toBe("scout");
+  });
+
+  it("does not offer skip option when brainstorm is already past scout step", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("output");
+    mockParseBrainstorm.mockReturnValue({
+      status: "ok",
+      data: { type: "questions", questions: [{ id: "q1", text: "Q?", type: "input" }] },
+    } as any);
+    ctx.ui.input.mockResolvedValue(undefined);
+
+    const state = makeState({ brainstorm: { step: "questions", scoutOutput: "data" } });
+    await runBrainstormPhase(state, ctx);
+
+    // select should only be called for questions, not for skip prompt
+    // The first select call should NOT have "Skip brainstorm" as an option
+    if (ctx.ui.select.mock.calls.length > 0) {
+      const firstCallOptions = ctx.ui.select.mock.calls[0][1];
+      expect(firstCallOptions).not.toContain("Skip brainstorm");
+    }
   });
 
   it("forwards onStreamEvent callback to dispatchAgent", async () => {
