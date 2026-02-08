@@ -26,12 +26,19 @@ vi.mock("../../review-parser.js", async (importOriginal) => {
 	return { ...orig, parseReviewOutput: vi.fn(), hasCriticalFindings: vi.fn() };
 });
 
+vi.mock("../../config.js", () => ({
+	getConfig: vi.fn(),
+}));
+
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget } from "../../dispatch.ts";
 import { saveState } from "../orchestrator-state.ts";
 import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.ts";
 import { parseReviewOutput, hasCriticalFindings } from "../../review-parser.ts";
-import { runExecutePhase } from "./execute.ts";
+import { getConfig } from "../../config.ts";
+import { runExecutePhase, runValidation } from "./execute.ts";
 import type { AgentProfile, DispatchResult, CostCheckResult } from "../../dispatch.ts";
+
+const mockGetConfig = vi.mocked(getConfig);
 
 const mockDiscoverAgents = vi.mocked(discoverAgents);
 const mockDispatchAgent = vi.mocked(dispatchAgent);
@@ -109,6 +116,7 @@ function setupDefaultMocks() {
 		status: "pass",
 		findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
 	});
+	mockGetConfig.mockReturnValue({ validationCommand: "" } as any);
 }
 
 describe("runExecutePhase", () => {
@@ -730,6 +738,94 @@ describe("runExecutePhase", () => {
 			for (const call of ctx.ui.select.mock.calls) {
 				expect(call[1]).toContain("Rollback");
 			}
+		});
+	});
+
+	// --- Validation gate ---
+
+	describe("validation gate (validationCommand)", () => {
+		it("skips validation gate when validationCommand is empty string", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({ validationCommand: "" } as any);
+
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[0].status).toBe("complete");
+		});
+
+		it("proceeds to reviews when validation command succeeds", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({ validationCommand: "true" } as any);
+
+			const state = makeState();
+			const ctx = makeCtx("/tmp");
+			const result = await runExecutePhase(state, ctx);
+
+			expect(result.tasks[0].status).toBe("complete");
+			expect(result.tasks[0].reviewsPassed).toContain("spec");
+		});
+
+		it("enters escalation when validation command fails", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({ validationCommand: "false" } as any);
+
+			const ctx = makeCtx("/tmp");
+			ctx.ui.select.mockResolvedValue("Skip");
+
+			const state = makeState();
+			const result = await runExecutePhase(state, ctx);
+
+			expect(ctx.ui.select).toHaveBeenCalled();
+			const selectCall = ctx.ui.select.mock.calls[0];
+			expect(selectCall[0]).toContain("Validation failed");
+			expect(result.tasks[0].status).toBe("skipped");
+		});
+
+		it("retries after validation failure when user selects Retry", async () => {
+			setupDefaultMocks();
+			// First validation fails, second passes (on retry of same task)
+			mockGetConfig
+				.mockReturnValueOnce({ validationCommand: "false" } as any)
+				.mockReturnValue({ validationCommand: "true" } as any);
+
+			const ctx = makeCtx("/tmp");
+			ctx.ui.select.mockResolvedValueOnce("Retry");
+
+			// Two tasks: after retry of task 1, loop advances to task 2 which completes
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, ctx);
+
+			// Task 1 was set to "pending" on retry, task 2 completes
+			expect(ctx.ui.select).toHaveBeenCalledTimes(1);
+			expect(result.tasks[1].status).toBe("complete");
+		});
+	});
+
+	// --- runValidation unit tests ---
+
+	describe("runValidation", () => {
+		it("returns success for a passing command", async () => {
+			const result = await runValidation("echo hello", "/tmp");
+			expect(result.success).toBe(true);
+		});
+
+		it("returns failure with stderr for a failing command", async () => {
+			const result = await runValidation("bash -c 'echo err >&2; exit 1'", "/tmp");
+			expect(result.success).toBe(false);
+			expect(result.error).toContain("err");
+		});
+
+		it("returns success true when command is empty string", async () => {
+			const result = await runValidation("", "/tmp");
+			expect(result.success).toBe(true);
+		});
+
+		it("returns failure for a nonexistent command", async () => {
+			const result = await runValidation("nonexistent_command_xyz_12345", "/tmp");
+			expect(result.success).toBe(false);
 		});
 	});
 });

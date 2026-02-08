@@ -5,10 +5,27 @@ import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.js"
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, type AgentProfile, type OnStreamEvent } from "../../dispatch.js";
 import { parseReviewOutput, formatFindings, hasCriticalFindings, type ReviewFindings, type ParseResult } from "../../review-parser.js";
 import { formatToolAction, formatTaskProgress, createActivityBuffer } from "../ui.js";
+import { getConfig } from "../../config.js";
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+
+const execFileAsync = promisify(execFileCb);
 
 type AgentMap = Map<string, AgentProfile>;
 type Ctx = ExtensionContext | { cwd: string; hasUI?: boolean; ui?: any };
+
+/** Run a validation command. Returns { success, error? }. Exported for testing. */
+export async function runValidation(command: string, cwd: string): Promise<{ success: boolean; error?: string }> {
+	if (!command) return { success: true };
+	try {
+		await execFileAsync("bash", ["-c", command], { cwd, timeout: 60_000 });
+		return { success: true };
+	} catch (err: any) {
+		const stderr = err.stderr || err.message || "unknown error";
+		return { success: false, error: String(stderr).slice(0, 500) };
+	}
+}
 
 export async function runExecutePhase(
 	state: OrchestratorState,
@@ -140,10 +157,34 @@ export async function runExecutePhase(
 			continue;
 		}
 
-		// c. CHANGED FILES
+		// c. VALIDATION GATE
+		const config = getConfig(ctx.cwd);
+		const validationCommand = config.validationCommand || "";
+		if (validationCommand) {
+			const valResult = await runValidation(validationCommand, ctx.cwd);
+			if (!valResult.success) {
+				const reason = `Validation failed: ${valResult.error || "command exited with non-zero"}`;
+				const escalation = await escalate(task, reason, ui, ctx.cwd);
+				if (escalation === "abort") {
+					state.error = "Aborted by user";
+					saveState(state, ctx.cwd);
+					return state;
+				}
+				if (escalation === "skip") {
+					task.status = "skipped";
+					saveState(state, ctx.cwd);
+					continue;
+				}
+				// retry
+				task.status = "pending";
+				continue;
+			}
+		}
+
+		// d. CHANGED FILES
 		let changedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
 
-		// d. SPEC REVIEW
+		// e. SPEC REVIEW
 		const specResult = await runReviewLoop(
 			state, task, "spec", specReviewer, implementer, changedFiles, maxRetries, ctx, signal, ui, makeOnStreamEvent,
 			(t, cf) => buildSpecReviewPrompt(t, cf),
@@ -151,14 +192,14 @@ export async function runExecutePhase(
 		if (specResult === "escalated") return state;
 		changedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
 
-		// e. QUALITY REVIEW
+		// f. QUALITY REVIEW
 		const qualResult = await runReviewLoop(
 			state, task, "quality", qualityReviewer, implementer, changedFiles, maxRetries, ctx, signal, ui, makeOnStreamEvent,
 			(t, cf) => buildQualityReviewPrompt(t, cf),
 		);
 		if (qualResult === "escalated") return state;
 
-		// f. OPTIONAL REVIEWS
+		// g. OPTIONAL REVIEWS
 		if (optionalReviewers.length > 0) {
 			changedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
 			const optAgents = optionalReviewers;
@@ -198,7 +239,7 @@ export async function runExecutePhase(
 			}
 		}
 
-		// g. COMPLETE
+		// h. COMPLETE
 		task.status = "complete";
 		state.currentTaskIndex = i + 1;
 		saveState(state, ctx.cwd);
