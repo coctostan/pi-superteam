@@ -49,12 +49,18 @@ Interactive configuration via `ctx.ui.select` and `ctx.ui.input`:
 
 ### 5. Execute
 
-Each task goes through: implement → spec review → quality review → optional reviews
+Each task goes through: implement → validation gate → spec review → quality review → optional reviews → cross-task validation
 
+- **Validation gate**: Runs `validationCommand` (e.g., `tsc --noEmit`) after implementation. On failure, dispatches the implementer for an auto-fix attempt, re-validates, then escalates if still failing
+- **Cross-task validation**: When `testCommand` is configured, captures a test baseline before execution begins. After each task completion (per `validationCadence`), runs the full test suite and classifies failures against the baseline:
+  - **New regressions** → block (escalate via failure taxonomy)
+  - **Pre-existing failures** → ignore (were broken before we started)
+  - **Flakes** → warn and continue (failed first run, passed re-run)
+- **Failure taxonomy**: `resolveFailureAction()` drives escalation behavior for `test-regression`, `test-flake`, and `validation-failure` types
 - **Streaming activity**: `onStreamEvent` callback shows real-time tool actions in the status bar
 - **Activity widget**: Rolling buffer of recent tool actions displayed via `ctx.ui.setWidget`
 - **Progress widget**: Task completion status updated after each task via `ctx.ui.setWidget`
-- **Escalation**: On failure, `ctx.ui.select` offers **Retry** / **Skip** / **Abort** (replaces old pendingInteraction pattern)
+- **Escalation**: On failure, `ctx.ui.select` offers **Retry** / **Rollback** / **Skip** / **Abort**
 
 ### 6. Finalize
 

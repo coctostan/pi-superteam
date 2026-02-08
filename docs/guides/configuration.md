@@ -135,6 +135,39 @@ Explicit mapping from impl file to test file. Takes priority over strategies.
 | `parallelOptional` | boolean | `true` | Run optional reviews concurrently |
 | `escalateOnMaxIterations` | boolean | `true` | Ask human when stuck |
 
+### `validationCommand`
+
+Command run after implementation, before code reviews. Catches build errors early.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `validationCommand` | string | `"tsc --noEmit"` | Shell command for pre-review validation |
+
+If the command fails, the orchestrator dispatches the implementer for an auto-fix attempt, then re-validates. If still failing, it escalates via the failure taxonomy (default action: `retry-then-escalate`).
+
+### `testCommand`
+
+Command for cross-task test suite validation. When configured, the orchestrator captures a baseline before execution begins and runs the full suite after task completion to detect regressions.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `testCommand` | string | `""` | Shell command for cross-task validation (empty = disabled) |
+
+### `validationCadence`
+
+Controls how often cross-task validation runs.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `validationCadence` | string | `"every"` | When to run cross-task validation |
+| `validationInterval` | number | `3` | Interval for `every-N` cadence |
+
+| Cadence | Behavior |
+|---------|----------|
+| `"every"` | Run after every completed task |
+| `"every-N"` | Run every N completed tasks (set N via `validationInterval`) |
+| `"on-demand"` | Never run automatically |
+
 ### `agents`
 
 | Option | Type | Default | Description |
