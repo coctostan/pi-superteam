@@ -186,6 +186,22 @@ describe("buildImplPrompt", () => {
 		const result = buildImplPrompt(task, "ctx");
 		expect(result).toMatch(/self.review/i);
 	});
+
+	it("includes previous task section when previousTaskSummary is provided", () => {
+		const task = makeTask();
+		const summary = { title: "Previous Task", status: "complete", changedFiles: ["src/prev.ts"] };
+		const result = buildImplPrompt(task, "ctx", summary);
+		expect(result).toContain("## Previous task");
+		expect(result).toContain("Previous Task");
+		expect(result).toContain("complete");
+		expect(result).toContain("src/prev.ts");
+	});
+
+	it("does not include previous task section when no summary provided", () => {
+		const task = makeTask();
+		const result = buildImplPrompt(task, "ctx");
+		expect(result).not.toContain("## Previous task");
+	});
 });
 
 // --- buildFixPrompt ---

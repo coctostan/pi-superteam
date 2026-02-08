@@ -83,8 +83,12 @@ export function buildPlanReviewPrompt(planContent: string, reviewType: "architec
 
 // --- Implementation ---
 
-export function buildImplPrompt(task: TaskExecState, planContext: string): string {
-	return [
+export function buildImplPrompt(
+	task: TaskExecState,
+	planContext: string,
+	previousTaskSummary?: { title: string; status: string; changedFiles: string[] },
+): string {
+	const parts = [
 		`## Task: ${task.title}`,
 		``,
 		task.description,
@@ -95,11 +99,26 @@ export function buildImplPrompt(task: TaskExecState, planContext: string): strin
 		`## Plan context`,
 		planContext,
 		``,
+	];
+
+	if (previousTaskSummary) {
+		parts.push(
+			`## Previous task`,
+			`**${previousTaskSummary.title}** — ${previousTaskSummary.status}`,
+			`Changed files:`,
+			previousTaskSummary.changedFiles.map((f) => `- ${f}`).join("\n"),
+			``,
+		);
+	}
+
+	parts.push(
 		`## Process`,
 		`Use strict TDD: write a failing test first, implement minimally, refactor.`,
 		`Commit after each green cycle.`,
 		`Self-review your changes before reporting done.`,
-	].join("\n");
+	);
+
+	return parts.join("\n");
 }
 
 // --- Fix ---
