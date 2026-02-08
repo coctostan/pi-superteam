@@ -57,3 +57,36 @@ export async function getCurrentSha(cwd: string): Promise<string> {
 		return "";
 	}
 }
+
+/**
+ * Hard-reset the repo at `cwd` to the given SHA.
+ * Returns true on success, false on any failure.
+ */
+export async function resetToSha(cwd: string, sha: string): Promise<boolean> {
+	if (!sha) return false;
+	try {
+		await execFile("git", ["reset", "--hard", sha], { cwd, timeout: 5000 });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Squash all commits since `baseSha` into a single commit with the given message.
+ * If baseSha equals HEAD (no new commits), this is a no-op returning true.
+ * Returns false on any failure.
+ */
+export async function squashCommitsSince(cwd: string, baseSha: string, message: string): Promise<boolean> {
+	try {
+		const currentSha = await getCurrentSha(cwd);
+		if (!currentSha) return false;
+		if (currentSha === baseSha) return true;
+
+		await execFile("git", ["reset", "--soft", baseSha], { cwd, timeout: 5000 });
+		await execFile("git", ["commit", "-m", message], { cwd, timeout: 5000 });
+		return true;
+	} catch {
+		return false;
+	}
+}

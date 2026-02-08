@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { getTrackedFiles, computeChangedFiles, getCurrentSha } from "./git-utils.ts";
+import { getTrackedFiles, computeChangedFiles, getCurrentSha, resetToSha, squashCommitsSince } from "./git-utils.ts";
+
 import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
@@ -95,5 +96,92 @@ describe("getCurrentSha", () => {
 	it("returns empty string for nonexistent directory", async () => {
 		const sha = await getCurrentSha("/nonexistent-dir-abc123");
 		expect(sha).toBe("");
+	});
+});
+
+// Shared helper for new tests
+const { execFile: execFileCb } = await import("node:child_process");
+const { promisify } = await import("node:util");
+const run = promisify(execFileCb);
+
+describe("resetToSha", () => {
+	it("resets to a previous commit SHA", async () => {
+		const dir = await makeTempRepo();
+		const baseSha = await getCurrentSha(dir);
+
+		fs.writeFileSync(path.join(dir, "file2.txt"), "new");
+		await run("git", ["add", "."], { cwd: dir });
+		await run("git", ["commit", "-m", "second"], { cwd: dir });
+
+		const headBefore = await getCurrentSha(dir);
+		expect(headBefore).not.toBe(baseSha);
+
+		const success = await resetToSha(dir, baseSha);
+		expect(success).toBe(true);
+
+		const headAfter = await getCurrentSha(dir);
+		expect(headAfter).toBe(baseSha);
+		expect(fs.existsSync(path.join(dir, "file2.txt"))).toBe(false);
+	});
+
+	it("returns false for empty SHA", async () => {
+		const dir = await makeTempRepo();
+		const result = await resetToSha(dir, "");
+		expect(result).toBe(false);
+	});
+
+	it("returns false for invalid SHA", async () => {
+		const dir = await makeTempRepo();
+		const result = await resetToSha(dir, "0000000000000000000000000000000000000000");
+		expect(result).toBe(false);
+	});
+
+	it("returns false for non-repo directory", async () => {
+		const dir = makeTempDir();
+		const result = await resetToSha(dir, "abc123");
+		expect(result).toBe(false);
+	});
+});
+
+describe("squashCommitsSince", () => {
+	it("squashes multiple commits into one", async () => {
+		const dir = await makeTempRepo();
+		const baseSha = await getCurrentSha(dir);
+
+		fs.writeFileSync(path.join(dir, "file2.txt"), "new");
+		await run("git", ["add", "."], { cwd: dir });
+		await run("git", ["commit", "-m", "second"], { cwd: dir });
+
+		fs.writeFileSync(path.join(dir, "file3.txt"), "another");
+		await run("git", ["add", "."], { cwd: dir });
+		await run("git", ["commit", "-m", "third"], { cwd: dir });
+
+		const success = await squashCommitsSince(dir, baseSha, "feat: squashed");
+		expect(success).toBe(true);
+
+		const { stdout } = await run("git", ["log", "--oneline"], { cwd: dir });
+		const lines = stdout.trim().split("\n");
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toContain("feat: squashed");
+
+		expect(fs.existsSync(path.join(dir, "file2.txt"))).toBe(true);
+		expect(fs.existsSync(path.join(dir, "file3.txt"))).toBe(true);
+	});
+
+	it("is a no-op when baseSha equals HEAD (no new commits)", async () => {
+		const dir = await makeTempRepo();
+		const sha = await getCurrentSha(dir);
+
+		const success = await squashCommitsSince(dir, sha, "feat: nothing");
+		expect(success).toBe(true);
+
+		const headAfter = await getCurrentSha(dir);
+		expect(headAfter).toBe(sha);
+	});
+
+	it("returns false for non-repo directory", async () => {
+		const dir = makeTempDir();
+		const result = await squashCommitsSince(dir, "abc123", "msg");
+		expect(result).toBe(false);
 	});
 });
