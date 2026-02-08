@@ -85,7 +85,7 @@ describe("runPlanReviewPhase", () => {
 			agents: [makeAgent("architect"), makeAgent("spec-reviewer"), makeAgent("planner")],
 			projectAgentsDir: null,
 		});
-		mockDispatchParallel.mockResolvedValue([makeDispatchResult("architect"), makeDispatchResult("spec-reviewer")]);
+		mockDispatchAgent.mockResolvedValue(makeDispatchResult("architect"));
 		mockGetFinalOutput.mockReturnValue(passReviewJson());
 
 		const ctx = makeCtx();
@@ -93,7 +93,11 @@ describe("runPlanReviewPhase", () => {
 		const state = makeStateWithPlan();
 		const result = await runPlanReviewPhase(state, ctx);
 
-		expect(mockDispatchParallel).toHaveBeenCalledOnce();
+		// Both reviewers dispatched via dispatchAgent (in parallel via Promise.all)
+		const reviewerCalls = mockDispatchAgent.mock.calls.filter(
+			c => c[0].name === "architect" || c[0].name === "spec-reviewer"
+		);
+		expect(reviewerCalls).toHaveLength(2);
 		expect(result.phase).toBe("configure");
 	});
 
@@ -163,7 +167,7 @@ describe("runPlanReviewPhase", () => {
 			agents: [makeAgent("architect"), makeAgent("spec-reviewer"), makeAgent("planner")],
 			projectAgentsDir: null,
 		});
-		mockDispatchParallel.mockResolvedValue([makeDispatchResult("architect"), makeDispatchResult("spec-reviewer")]);
+		mockDispatchAgent.mockResolvedValue(makeDispatchResult("architect"));
 		mockGetFinalOutput.mockReturnValue(passReviewJson());
 
 		const ctx = makeCtx();
@@ -171,8 +175,11 @@ describe("runPlanReviewPhase", () => {
 		const state = makeStateWithPlan({ designContent: "# Design\nThe system uses Passport.js..." } as any);
 		await runPlanReviewPhase(state, ctx);
 
-		const tasks = mockDispatchParallel.mock.calls[0][1] as string[];
-		expect(tasks[0]).toContain("Passport.js");
+		// Check that review prompts contain design content
+		const reviewerCalls = mockDispatchAgent.mock.calls.filter(
+			c => c[0].name === "architect" || c[0].name === "spec-reviewer"
+		);
+		expect(reviewerCalls[0][1]).toContain("Passport.js");
 	});
 
 	it("dispatches planner for revision when review fails", async () => {
@@ -341,12 +348,12 @@ describe("runPlanReviewPhase", () => {
 		expect(firstDispatchCall[5]).toBeDefined();
 	});
 
-	it("forwards onStreamEvent to dispatchParallel when multiple reviewers", async () => {
+	it("forwards onStreamEvent to each reviewer dispatchAgent when multiple reviewers", async () => {
 		mockDiscoverAgents.mockReturnValue({
 			agents: [makeAgent("architect"), makeAgent("spec-reviewer"), makeAgent("planner")],
 			projectAgentsDir: null,
 		});
-		mockDispatchParallel.mockResolvedValue([makeDispatchResult("architect"), makeDispatchResult("spec-reviewer")]);
+		mockDispatchAgent.mockResolvedValue(makeDispatchResult("architect"));
 		mockGetFinalOutput.mockReturnValue(passReviewJson());
 
 		const ctx = makeCtx();
@@ -356,8 +363,16 @@ describe("runPlanReviewPhase", () => {
 		const state = makeStateWithPlan();
 		await runPlanReviewPhase(state, ctx, undefined, onStreamEvent);
 
-		// dispatchParallel doesn't take onStreamEvent directly, but dispatchAgent calls within revision should
-		expect(mockDispatchParallel).toHaveBeenCalledOnce();
+		// With multiple reviewers, dispatchAgent should be called for each reviewer (not dispatchParallel)
+		const reviewerCalls = mockDispatchAgent.mock.calls.filter(
+			c => c[0].name === "architect" || c[0].name === "spec-reviewer"
+		);
+		expect(reviewerCalls).toHaveLength(2);
+		// Each call should have onStreamEvent wrapper (6th arg, index 5)
+		for (const call of reviewerCalls) {
+			expect(call.length).toBeGreaterThanOrEqual(6);
+			expect(call[5]).toBeDefined(); // onStreamEvent wrapper
+		}
 	});
 
 	it("forwards onStreamEvent to planner dispatch during revision", async () => {
@@ -410,7 +425,7 @@ describe("runPlanReviewPhase", () => {
 			agents: [makeAgent("architect"), makeAgent("spec-reviewer"), makeAgent("planner")],
 			projectAgentsDir: null,
 		});
-		mockDispatchParallel.mockResolvedValue([makeDispatchResult("architect"), makeDispatchResult("spec-reviewer")]);
+		mockDispatchAgent.mockResolvedValue(makeDispatchResult("architect"));
 		mockGetFinalOutput.mockReturnValue(passReviewJson());
 
 		const ctx = makeCtx();
@@ -418,6 +433,13 @@ describe("runPlanReviewPhase", () => {
 		const state = makeStateWithPlan();
 		await runPlanReviewPhase(state, ctx, controller.signal);
 
-		expect(mockDispatchParallel.mock.calls[0][3]).toBe(controller.signal);
+		// Each dispatchAgent call should receive the signal (5th arg, index 3)
+		const reviewerCalls = mockDispatchAgent.mock.calls.filter(
+			c => c[0].name === "architect" || c[0].name === "spec-reviewer"
+		);
+		expect(reviewerCalls).toHaveLength(2);
+		for (const call of reviewerCalls) {
+			expect(call[3]).toBe(controller.signal);
+		}
 	});
 });

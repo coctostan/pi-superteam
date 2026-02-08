@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import type { OrchestratorState } from "../orchestrator-state.js";
 import { saveState } from "../orchestrator-state.js";
 import { buildPlanReviewPrompt, buildPlanRevisionPromptFromFindings } from "../prompt-builder.js";
-import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, type OnStreamEvent } from "../../dispatch.js";
+import { discoverAgents, dispatchAgent, getFinalOutput, type OnStreamEvent } from "../../dispatch.js";
 import { parseReviewOutput, formatFindings } from "../../review-parser.js";
 import { parseTaskBlock, parseTaskHeadings } from "../state.js";
 import { formatToolAction, createActivityBuffer } from "../ui.js";
@@ -164,16 +164,11 @@ async function dispatchReviewers(
 	signal?: AbortSignal,
 	onStreamEvent?: OnStreamEvent,
 ): Promise<DispatchResult[]> {
-	if (reviewers.length === 1) {
-		const { agent, reviewType } = reviewers[0];
-		const prompt = buildPlanReviewPrompt(planContent, reviewType, designContent);
-		const result = await dispatchAgent(agent, prompt, cwd, signal, undefined, onStreamEvent);
-		return [result];
-	}
-
-	const agents = reviewers.map((r) => r.agent);
-	const tasks = reviewers.map((r) => buildPlanReviewPrompt(planContent, r.reviewType, designContent));
-	return dispatchParallel(agents, tasks, cwd, signal);
+	const promises = reviewers.map((r) => {
+		const prompt = buildPlanReviewPrompt(planContent, r.reviewType, designContent);
+		return dispatchAgent(r.agent, prompt, cwd, signal, undefined, onStreamEvent);
+	});
+	return Promise.all(promises);
 }
 
 function collectFindings(parsed: ParseResult[]): string {
