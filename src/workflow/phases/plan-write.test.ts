@@ -206,4 +206,29 @@ describe("runPlanWritePhase", () => {
 
     expect(result.totalCostUsd).toBeGreaterThan(1.0);
   });
+
+  it("forwards onStreamEvent callback to dispatchAgent", async () => {
+    const { runPlanWritePhase } = await import("./plan-write.js");
+    const ctx = { cwd: tmpDir, hasUI: true, ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() } } as any;
+
+    mockDispatchAgent.mockImplementation(async () => {
+      const planDir = path.join(tmpDir, "docs/plans");
+      fs.mkdirSync(planDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(planDir, "2026-02-07-add-auth-plan.md"),
+        "# Plan\n```superteam-tasks\n- title: T\n  description: D\n  files: [a.ts]\n```"
+      );
+      return makeDispatchResult();
+    });
+    mockGetFinalOutput.mockReturnValue("output");
+
+    const onStreamEvent = vi.fn();
+    const state = makeState();
+    await runPlanWritePhase(state, ctx, undefined, onStreamEvent);
+
+    // Verify dispatchAgent was called with onStreamEvent in the 6th position
+    const firstDispatchCall = mockDispatchAgent.mock.calls[0];
+    expect(firstDispatchCall.length).toBeGreaterThanOrEqual(6);
+    expect(firstDispatchCall[5]).toBeDefined();
+  });
 });

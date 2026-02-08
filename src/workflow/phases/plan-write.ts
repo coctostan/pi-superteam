@@ -6,9 +6,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { OrchestratorState, TaskExecState } from "../orchestrator-state.js";
-import { discoverAgents, dispatchAgent, getFinalOutput } from "../../dispatch.js";
+import { discoverAgents, dispatchAgent, getFinalOutput, type OnStreamEvent } from "../../dispatch.js";
 import { buildPlannerPromptFromDesign } from "../prompt-builder.js";
 import { parseTaskBlock, parseTaskHeadings } from "../state.js";
+import { formatToolAction, createActivityBuffer } from "../ui.js";
 
 type Ctx = ExtensionContext | { cwd: string; hasUI?: boolean; ui?: any };
 
@@ -16,6 +17,7 @@ export async function runPlanWritePhase(
 	state: OrchestratorState,
 	ctx: Ctx,
 	signal?: AbortSignal,
+	onStreamEvent?: OnStreamEvent,
 ): Promise<OrchestratorState> {
 	const ui = (ctx as any).ui;
 
@@ -36,6 +38,20 @@ export async function runPlanWritePhase(
 		? state.designPath.replace(/-design\.md$/, "-plan.md")
 		: `docs/plans/${new Date().toISOString().slice(0, 10)}-plan.md`;
 
+	// Activity buffer for streaming
+	const activityBuffer = createActivityBuffer(10);
+	const makeOnStreamEvent = (): OnStreamEvent => {
+		return (event) => {
+			if (event.type === "tool_execution_start") {
+				const action = formatToolAction(event);
+				activityBuffer.push(action);
+				ui?.setStatus?.("workflow", action);
+				ui?.setWidget?.("workflow-activity", activityBuffer.lines());
+			}
+			onStreamEvent?.(event);
+		};
+	};
+
 	const MAX_RETRIES = 2;
 
 	for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -46,7 +62,7 @@ export async function runPlanWritePhase(
 				+ "\n\nIMPORTANT: The plan file MUST contain a ```superteam-tasks YAML block with at least one task."
 			: buildPlannerPromptFromDesign(designContent, scoutOutput, state.userDescription, planPath);
 
-		const result = await dispatchAgent(plannerAgent, prompt, ctx.cwd, signal);
+		const result = await dispatchAgent(plannerAgent, prompt, ctx.cwd, signal, undefined, makeOnStreamEvent());
 		state.totalCostUsd += result.usage.cost;
 
 		// Read plan file from disk
