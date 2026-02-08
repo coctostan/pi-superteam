@@ -61,6 +61,7 @@ export interface SuperteamConfig {
 	review: ReviewConfig;
 	agents: AgentConfig;
 	costs: CostConfig;
+	validationCommand: string;
 }
 
 // --- Defaults ---
@@ -97,6 +98,7 @@ const DEFAULT_CONFIG: SuperteamConfig = {
 		warnAtUsd: 5.0,
 		hardLimitUsd: 20.0,
 	},
+	validationCommand: "tsc --noEmit",
 };
 
 // --- Discovery ---
