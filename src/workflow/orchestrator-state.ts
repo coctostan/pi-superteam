@@ -76,6 +76,7 @@ export type TaskExecState = {
   reviewsFailed: string[];
   fixAttempts: number;
   gitShaBeforeImpl?: string;
+  summary?: { title: string; status: string; changedFiles: string[] };
 };
 
 export type PendingInteraction = {

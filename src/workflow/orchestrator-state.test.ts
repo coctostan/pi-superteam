@@ -201,6 +201,36 @@ describe("orchestrator-state", () => {
     });
   });
 
+  describe("TaskExecState summary field", () => {
+    it("TaskExecState accepts optional summary with title, status, changedFiles", () => {
+      const task: TaskExecState = {
+        id: 1,
+        title: "Task 1",
+        description: "Do something",
+        files: ["src/a.ts"],
+        status: "complete",
+        reviewsPassed: ["spec"],
+        reviewsFailed: [],
+        fixAttempts: 0,
+        summary: {
+          title: "Task 1",
+          status: "complete",
+          changedFiles: ["src/a.ts", "src/a.test.ts"],
+        },
+      };
+      expect(task.summary).toBeDefined();
+      expect(task.summary!.changedFiles).toHaveLength(2);
+    });
+
+    it("summary is optional — existing tasks without summary still work", () => {
+      const task: TaskExecState = {
+        id: 1, title: "T", description: "D", files: ["a.ts"],
+        status: "pending", reviewsPassed: [], reviewsFailed: [], fixAttempts: 0,
+      };
+      expect(task.summary).toBeUndefined();
+    });
+  });
+
   describe("updated state model", () => {
     it("createInitialState starts in brainstorm phase", () => {
       const state = createInitialState("Build auth");
