@@ -8,7 +8,7 @@
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { OrchestratorState, BrainstormQuestion, BrainstormApproach, DesignSection } from "../orchestrator-state.js";
-import { discoverAgents, dispatchAgent, getFinalOutput, type AgentProfile } from "../../dispatch.js";
+import { discoverAgents, dispatchAgent, getFinalOutput, type AgentProfile, type OnStreamEvent } from "../../dispatch.js";
 import { parseBrainstormOutput } from "../brainstorm-parser.js";
 import {
 	buildScoutPrompt,
@@ -17,7 +17,7 @@ import {
 	buildBrainstormDesignPrompt,
 	buildBrainstormSectionRevisionPrompt,
 } from "../prompt-builder.js";
-import { formatStatus } from "../ui.js";
+import { formatStatus, formatToolAction, createActivityBuffer } from "../ui.js";
 
 type Ctx = ExtensionContext | { cwd: string; hasUI?: boolean; ui?: any };
 
@@ -25,6 +25,7 @@ export async function runBrainstormPhase(
 	state: OrchestratorState,
 	ctx: Ctx,
 	signal?: AbortSignal,
+	onStreamEvent?: OnStreamEvent,
 ): Promise<OrchestratorState> {
 	// Discover agents
 	const { agents } = discoverAgents(ctx.cwd, true);
@@ -38,10 +39,24 @@ export async function runBrainstormPhase(
 
 	const ui = (ctx as any).ui;
 
+	// Activity buffer for streaming
+	const activityBuffer = createActivityBuffer(10);
+	const makeOnStreamEvent = (): OnStreamEvent => {
+		return (event) => {
+			if (event.type === "tool_execution_start") {
+				const action = formatToolAction(event);
+				activityBuffer.push(action);
+				ui?.setStatus?.("workflow", action);
+				ui?.setWidget?.("workflow-activity", activityBuffer.lines());
+			}
+			onStreamEvent?.(event);
+		};
+	};
+
 	// Sub-step: scout
 	if (state.brainstorm.step === "scout") {
 		ui?.setStatus?.("workflow", formatStatus(state));
-		const result = await dispatchAgent(scoutAgent, buildScoutPrompt(ctx.cwd), ctx.cwd, signal);
+		const result = await dispatchAgent(scoutAgent, buildScoutPrompt(ctx.cwd), ctx.cwd, signal, undefined, makeOnStreamEvent());
 		state.totalCostUsd += result.usage.cost;
 		state.brainstorm.scoutOutput = getFinalOutput(result.messages);
 		state.brainstorm.step = "questions";
@@ -56,7 +71,7 @@ export async function runBrainstormPhase(
 		const questionsResult = await dispatchBrainstormerWithRetry(
 			brainstormerAgent, 
 			buildBrainstormQuestionsPrompt(scoutOutput, state.userDescription),
-			ctx.cwd, state, signal, ui,
+			ctx.cwd, state, signal, ui, makeOnStreamEvent,
 		);
 		if (!questionsResult) return state; // retry exhausted or aborted
 
@@ -99,7 +114,7 @@ export async function runBrainstormPhase(
 		const approachResult = await dispatchBrainstormerWithRetry(
 			brainstormerAgent,
 			buildBrainstormApproachesPrompt(scoutOutput, state.userDescription, qa),
-			ctx.cwd, state, signal, ui,
+			ctx.cwd, state, signal, ui, makeOnStreamEvent,
 		);
 		if (!approachResult) return state;
 
@@ -143,7 +158,7 @@ export async function runBrainstormPhase(
 		const designResult = await dispatchBrainstormerWithRetry(
 			brainstormerAgent,
 			buildBrainstormDesignPrompt(scoutOutput, state.userDescription, qa, chosenApproach),
-			ctx.cwd, state, signal, ui,
+			ctx.cwd, state, signal, ui, makeOnStreamEvent,
 		);
 		if (!designResult) return state;
 
@@ -173,7 +188,7 @@ export async function runBrainstormPhase(
 				const revisionResult = await dispatchBrainstormerWithRetry(
 					brainstormerAgent,
 					buildBrainstormSectionRevisionPrompt(section, feedback, state.userDescription),
-					ctx.cwd, state, signal, ui,
+					ctx.cwd, state, signal, ui, makeOnStreamEvent,
 				);
 				if (!revisionResult) return state;
 
@@ -219,6 +234,7 @@ async function dispatchBrainstormerWithRetry(
 	state: OrchestratorState,
 	signal: AbortSignal | undefined,
 	ui: any,
+	makeOnStreamEvent: () => OnStreamEvent,
 ): Promise<{ data: any } | null> {
 	const MAX_RETRIES = 2;
 
@@ -227,7 +243,7 @@ async function dispatchBrainstormerWithRetry(
 			? prompt + "\n\nIMPORTANT: You MUST include a ```superteam-brainstorm JSON block in your response."
 			: prompt;
 
-		const result = await dispatchAgent(agent, taskPrompt, cwd, signal);
+		const result = await dispatchAgent(agent, taskPrompt, cwd, signal, undefined, makeOnStreamEvent());
 		state.totalCostUsd += result.usage.cost;
 
 		const output = getFinalOutput(result.messages);

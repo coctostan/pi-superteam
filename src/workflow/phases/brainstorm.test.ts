@@ -1,4 +1,4 @@
-// src/workflow/phases/brainstorm.test.ts
+// src/workflow/phases/brainstorm.test.ts — onStreamEvent wiring
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -307,5 +307,26 @@ describe("runBrainstormPhase", () => {
 
     expect(result.phase).toBe("brainstorm"); // did not advance
     expect(result.error).toBeUndefined();
+  });
+
+  it("forwards onStreamEvent callback to dispatchAgent", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("scout output");
+    mockParseBrainstorm.mockReturnValue({
+      status: "ok",
+      data: { type: "questions", questions: [{ id: "q1", text: "Q?", type: "input" }] },
+    } as any);
+    ctx.ui.input.mockResolvedValue(undefined);
+
+    const onStreamEvent = vi.fn();
+    const state = makeState();
+    await runBrainstormPhase(state, ctx, undefined, onStreamEvent);
+
+    // Verify dispatchAgent was called with onStreamEvent in the 6th position
+    const firstDispatchCall = mockDispatchAgent.mock.calls[0];
+    expect(firstDispatchCall.length).toBeGreaterThanOrEqual(6);
+    expect(firstDispatchCall[5]).toBeDefined();
   });
 });
