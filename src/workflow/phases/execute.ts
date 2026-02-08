@@ -6,6 +6,8 @@ import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkC
 import { parseReviewOutput, formatFindings, hasCriticalFindings, type ReviewFindings, type ParseResult } from "../../review-parser.js";
 import { formatToolAction, formatTaskProgress, createActivityBuffer } from "../ui.js";
 import { getConfig } from "../../config.js";
+import { runCrossTaskValidation, shouldRunValidation } from "../cross-task-validation.js";
+import { captureBaseline } from "../test-baseline.js";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -92,6 +94,17 @@ export async function runExecutePhase(
 			}
 		};
 	};
+
+	// 4b. Capture test baseline if testCommand configured
+	{
+		const baselineConfig = getConfig(ctx.cwd);
+		const testCommand = baselineConfig.testCommand || "";
+		if (testCommand && !state.testBaseline) {
+			ui?.notify?.("Capturing test baseline...", "info");
+			state.testBaseline = await captureBaseline(testCommand, ctx.cwd);
+			saveState(state, ctx.cwd);
+		}
+	}
 
 	// 5. Task loop
 	let batchCounter = 0;
@@ -278,6 +291,49 @@ export async function runExecutePhase(
 
 		// Update progress widget
 		ui?.setWidget?.("workflow-progress", formatTaskProgress(state.tasks, i + 1));
+
+		// h2. CROSS-TASK VALIDATION
+		{
+			const crossConfig = getConfig(ctx.cwd);
+			const testCmd = crossConfig.testCommand || "";
+			if (testCmd && state.testBaseline) {
+				const valCadence = crossConfig.validationCadence || "every";
+				const valInterval = crossConfig.validationInterval || 3;
+				const completedCount = state.tasks.filter(t => t.status === "complete").length;
+
+				if (shouldRunValidation(valCadence, valInterval, completedCount)) {
+					const valResult = await runCrossTaskValidation(testCmd, state.testBaseline, ctx.cwd);
+
+					// Warn about flaky tests
+					if (valResult.flakyTests.length > 0) {
+						ui?.notify?.(`Detected flaky tests: ${valResult.flakyTests.join(", ")}`, "warning");
+					}
+
+					// Block on genuine regressions
+					if (!valResult.passed) {
+						const failNames = valResult.blockingFailures.map(f => f.name).join(", ");
+						const escalation = await escalate(
+							task,
+							`Task introduced test regression: ${failNames}`,
+							ui,
+							ctx.cwd,
+						);
+						if (escalation === "abort") {
+							state.error = "Aborted by user";
+							saveState(state, ctx.cwd);
+							return state;
+						}
+						if (escalation === "skip") {
+							task.status = "skipped";
+							saveState(state, ctx.cwd);
+							continue;
+						}
+						task.status = "pending";
+						continue;
+					}
+				}
+			}
+		}
 
 		// h. EXECUTION MODE CHECK
 		batchCounter++;
