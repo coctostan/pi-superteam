@@ -1,6 +1,7 @@
 // src/workflow/brainstorm-parser.test.ts
 import { describe, it, expect } from "vitest";
 import { parseBrainstormOutput, sanitizeJsonNewlines } from "./brainstorm-parser.js";
+import { extractFencedBlock, extractLastBraceBlock, sanitizeJsonNewlines as sharedSanitize } from "../parse-utils.js";
 
 describe("parseBrainstormOutput", () => {
   it("parses questions response from superteam-brainstorm block", () => {
@@ -114,6 +115,24 @@ describe("sanitizeJsonNewlines", () => {
     const input = '{"a":"x\ny","b":"p\nq"}';
     const expected = '{"a":"x\\ny","b":"p\\nq"}';
     expect(sanitizeJsonNewlines(input)).toBe(expected);
+  });
+});
+
+describe("brainstorm-parser uses shared parse-utils", () => {
+  it("sanitizeJsonNewlines re-exported from brainstorm-parser matches shared implementation", () => {
+    const input = '{"a":"x\ny"}';
+    expect(sanitizeJsonNewlines(input)).toBe(sharedSanitize(input));
+  });
+
+  it("parseBrainstormOutput uses shared extractFencedBlock for superteam-brainstorm blocks", () => {
+    const obj = { type: "questions", questions: [{ id: "q1", text: "Q?", type: "input" }] };
+    const raw = "```superteam-brainstorm\n" + JSON.stringify(obj) + "\n```";
+    // Verify shared extractFencedBlock finds the same content
+    const extracted = extractFencedBlock(raw, "superteam-brainstorm");
+    expect(extracted).toBe(JSON.stringify(obj));
+    // And parseBrainstormOutput still works
+    const result = parseBrainstormOutput(raw);
+    expect(result.status).toBe("ok");
   });
 });
 
