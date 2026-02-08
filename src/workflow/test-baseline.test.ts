@@ -1,10 +1,18 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   classifyFailures,
+  captureBaseline,
   type TestBaseline,
   type ClassifiedResults,
 } from "./test-baseline.js";
 import type { TestResult } from "./test-output-parser.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+
+const run = promisify(execFileCb);
 
 function makeBaseline(overrides: Partial<TestBaseline> = {}): TestBaseline {
   return {
@@ -125,5 +133,59 @@ describe("classifyFailures", () => {
     expect(classified.preExisting.map(r => r.name)).toEqual(["fails-stays"]);
     expect(classified.newPasses.map(r => r.name)).toEqual(["fails-fixed"]);
     expect(classified.flakeCandidates.map(r => r.name)).toEqual(["passes-regresses"]);
+  });
+});
+
+describe("captureBaseline (integration)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "baseline-int-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function initGitRepo(dir: string) {
+    await run("git", ["init"], { cwd: dir });
+    await run("git", ["config", "user.email", "test@test.com"], { cwd: dir });
+    await run("git", ["config", "user.name", "Test"], { cwd: dir });
+    fs.writeFileSync(path.join(dir, "dummy.txt"), "x");
+    await run("git", ["add", "."], { cwd: dir });
+    await run("git", ["commit", "-m", "init"], { cwd: dir });
+  }
+
+  it("captures baseline from a command that outputs test-like lines", async () => {
+    const script = path.join(tmpDir, "fake-test.sh");
+    fs.writeFileSync(script, [
+      "#!/bin/bash",
+      'echo " ✓ test-a > passes (1ms)"',
+      'echo " ✗ test-b > fails (2ms)"',
+      'echo "   → expected 1, got 2"',
+      "exit 1",
+    ].join("\n"), { mode: 0o755 });
+
+    await initGitRepo(tmpDir);
+
+    const baseline = await captureBaseline(`bash ${script}`, tmpDir);
+
+    expect(baseline.sha).toBeTruthy();
+    expect(baseline.command).toBe(`bash ${script}`);
+    expect(baseline.results).toHaveLength(2);
+    expect(baseline.results[0].name).toBe("test-a > passes");
+    expect(baseline.results[0].passed).toBe(true);
+    expect(baseline.results[1].name).toBe("test-b > fails");
+    expect(baseline.results[1].passed).toBe(false);
+    expect(baseline.knownFailures).toEqual(["test-b > fails"]);
+  });
+
+  it("returns empty results for unparseable output", async () => {
+    await initGitRepo(tmpDir);
+
+    const baseline = await captureBaseline("echo 'no test output'", tmpDir);
+
+    expect(baseline.results).toEqual([]);
+    expect(baseline.knownFailures).toEqual([]);
   });
 });
