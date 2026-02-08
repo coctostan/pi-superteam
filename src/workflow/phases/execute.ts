@@ -8,6 +8,7 @@ import { formatToolAction, formatTaskProgress, createActivityBuffer } from "../u
 import { getConfig } from "../../config.js";
 import { runCrossTaskValidation, shouldRunValidation } from "../cross-task-validation.js";
 import { captureBaseline } from "../test-baseline.js";
+import { resolveFailureAction } from "../failure-taxonomy.js";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -191,6 +192,7 @@ export async function runExecutePhase(
 						const revalCommand = revalConfig.validationCommand || "";
 						const revalResult = revalCommand ? await runValidation(revalCommand, ctx.cwd) : { success: true };
 						if (!revalResult.success) {
+							resolveFailureAction("validation-failure");
 							const reason = `Validation still failing after auto-fix: ${revalResult.error || "command exited with non-zero"}`;
 							const escalation = await escalate(task, reason, ui, ctx.cwd);
 							if (escalation === "abort") {
@@ -207,6 +209,7 @@ export async function runExecutePhase(
 							continue;
 						}
 					} else {
+						resolveFailureAction("validation-failure");
 						const reason = `Validation failed: ${valResult.error || "command exited with non-zero"}`;
 						const escalation = await escalate(task, reason, ui, ctx.cwd);
 						if (escalation === "abort") {
@@ -304,32 +307,39 @@ export async function runExecutePhase(
 				if (shouldRunValidation(valCadence, valInterval, completedCount)) {
 					const valResult = await runCrossTaskValidation(testCmd, state.testBaseline, ctx.cwd);
 
-					// Warn about flaky tests
+					// Classify flakes via taxonomy
 					if (valResult.flakyTests.length > 0) {
-						ui?.notify?.(`Detected flaky tests: ${valResult.flakyTests.join(", ")}`, "warning");
+						const flakeAction = resolveFailureAction("test-flake");
+						if (flakeAction === "warn-continue") {
+							ui?.notify?.(`Detected flaky tests: ${valResult.flakyTests.join(", ")}`, "warning");
+						}
 					}
 
-					// Block on genuine regressions
+					// Classify regressions via taxonomy
 					if (!valResult.passed) {
+						const regressionAction = resolveFailureAction("test-regression");
 						const failNames = valResult.blockingFailures.map(f => f.name).join(", ");
-						const escalation = await escalate(
-							task,
-							`Task introduced test regression: ${failNames}`,
-							ui,
-							ctx.cwd,
-						);
-						if (escalation === "abort") {
-							state.error = "Aborted by user";
-							saveState(state, ctx.cwd);
-							return state;
-						}
-						if (escalation === "skip") {
-							task.status = "skipped";
-							saveState(state, ctx.cwd);
+
+						if (regressionAction === "stop-show-diff" || regressionAction === "escalate") {
+							const escalation = await escalate(
+								task,
+								`Task introduced test regression: ${failNames}`,
+								ui,
+								ctx.cwd,
+							);
+							if (escalation === "abort") {
+								state.error = "Aborted by user";
+								saveState(state, ctx.cwd);
+								return state;
+							}
+							if (escalation === "skip") {
+								task.status = "skipped";
+								saveState(state, ctx.cwd);
+								continue;
+							}
+							task.status = "pending";
 							continue;
 						}
-						task.status = "pending";
-						continue;
 					}
 				}
 			}

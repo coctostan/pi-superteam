@@ -31,6 +31,21 @@ vi.mock("../../config.js", () => ({
 	getConfig: vi.fn(),
 }));
 
+vi.mock("../failure-taxonomy.js", () => ({
+	resolveFailureAction: vi.fn(),
+	DEFAULT_FAILURE_ACTIONS: {
+		"parse-error": "auto-retry",
+		"test-regression": "stop-show-diff",
+		"test-flake": "warn-continue",
+		"test-preexisting": "ignore",
+		"tool-timeout": "retry-then-escalate",
+		"budget-threshold": "checkpoint",
+		"review-max-retries": "escalate",
+		"validation-failure": "retry-then-escalate",
+		"impl-crash": "retry-then-escalate",
+	},
+}));
+
 vi.mock("../cross-task-validation.js", () => ({
 	runCrossTaskValidation: vi.fn(),
 	shouldRunValidation: vi.fn(),
@@ -48,11 +63,13 @@ import { getConfig } from "../../config.ts";
 import { runExecutePhase, runValidation } from "./execute.ts";
 import { runCrossTaskValidation, shouldRunValidation } from "../cross-task-validation.ts";
 import { captureBaseline } from "../test-baseline.ts";
+import { resolveFailureAction } from "../failure-taxonomy.ts";
 import type { AgentProfile, DispatchResult, CostCheckResult } from "../../dispatch.ts";
 
 const mockRunCrossTaskValidation = vi.mocked(runCrossTaskValidation);
 const mockShouldRunValidation = vi.mocked(shouldRunValidation);
 const mockCaptureBaseline = vi.mocked(captureBaseline);
+const mockResolveFailureAction = vi.mocked(resolveFailureAction);
 
 const mockGetConfig = vi.mocked(getConfig);
 
@@ -134,6 +151,15 @@ function setupDefaultMocks() {
 	});
 	mockGetConfig.mockReturnValue({ validationCommand: "", testCommand: "", validationCadence: "every", validationInterval: 3 } as any);
 	mockShouldRunValidation.mockReturnValue(false);
+	mockResolveFailureAction.mockImplementation((type) => {
+		const defaults: Record<string, string> = {
+			"test-regression": "stop-show-diff",
+			"test-flake": "warn-continue",
+			"validation-failure": "retry-then-escalate",
+			"impl-crash": "retry-then-escalate",
+		};
+		return (defaults[type] || "escalate") as any;
+	});
 }
 
 describe("runExecutePhase", () => {
@@ -1022,6 +1048,88 @@ describe("runExecutePhase", () => {
 
 			expect(result.testBaseline).toBeDefined();
 			expect(result.testBaseline!.sha).toBe("abc");
+		});
+	});
+
+	// --- Failure taxonomy integration ---
+
+	describe("failure taxonomy integration", () => {
+		it("calls resolveFailureAction for test-regression on cross-task validation failure", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({
+				validationCommand: "",
+				testCommand: "npx vitest run",
+				validationCadence: "every",
+				validationInterval: 3,
+			} as any);
+			mockShouldRunValidation.mockReturnValue(true);
+			mockCaptureBaseline.mockResolvedValue({
+				capturedAt: Date.now(), sha: "abc", command: "npx vitest run",
+				results: [{ name: "test-a", passed: true }], knownFailures: [],
+			});
+			mockRunCrossTaskValidation.mockResolvedValue({
+				passed: false,
+				classified: {
+					newFailures: [{ name: "test-a", passed: false }],
+					preExisting: [], flakeCandidates: [], newPasses: [],
+				},
+				flakyTests: [],
+				blockingFailures: [{ name: "test-a", passed: false }],
+			});
+			mockResolveFailureAction.mockReturnValue("stop-show-diff");
+
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
+			const state = makeState();
+			await runExecutePhase(state, ctx);
+
+			expect(mockResolveFailureAction).toHaveBeenCalledWith("test-regression");
+		});
+
+		it("calls resolveFailureAction for test-flake and warns when action is warn-continue", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({
+				validationCommand: "",
+				testCommand: "npx vitest run",
+				validationCadence: "every",
+				validationInterval: 3,
+			} as any);
+			mockShouldRunValidation.mockReturnValue(true);
+			mockCaptureBaseline.mockResolvedValue({
+				capturedAt: Date.now(), sha: "abc", command: "npx vitest run",
+				results: [{ name: "test-a", passed: true }], knownFailures: [],
+			});
+			mockRunCrossTaskValidation.mockResolvedValue({
+				passed: true,
+				classified: {
+					newFailures: [], preExisting: [],
+					flakeCandidates: [{ name: "test-a", passed: false }],
+					newPasses: [],
+				},
+				flakyTests: ["test-a"],
+				blockingFailures: [],
+			});
+			mockResolveFailureAction.mockReturnValue("warn-continue");
+
+			const ctx = makeCtx();
+			const state = makeState();
+			const result = await runExecutePhase(state, ctx);
+
+			expect(mockResolveFailureAction).toHaveBeenCalledWith("test-flake");
+			expect(result.tasks[0].status).toBe("complete");
+		});
+
+		it("calls resolveFailureAction for validation-failure on validation gate failure", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({ validationCommand: "false", testCommand: "", validationCadence: "every", validationInterval: 3 } as any);
+			mockResolveFailureAction.mockReturnValue("retry-then-escalate");
+
+			const ctx = makeCtx("/tmp");
+			ctx.ui.select.mockResolvedValue("Skip");
+			const state = makeState();
+			await runExecutePhase(state, ctx);
+
+			expect(mockResolveFailureAction).toHaveBeenCalledWith("validation-failure");
 		});
 	});
 
