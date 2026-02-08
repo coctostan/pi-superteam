@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { extractFencedBlock } from "./parse-utils.js";
+import { extractFencedBlock, extractLastBraceBlock, sanitizeJsonNewlines } from "./parse-utils.js";
+
 
 describe("extractFencedBlock", () => {
   it("extracts content from a superteam-brainstorm fenced block", () => {
@@ -47,5 +48,59 @@ describe("extractFencedBlock", () => {
   it("returns empty string for empty fenced block", () => {
     const text = '```superteam-json\n\n```';
     expect(extractFencedBlock(text, "superteam-json")).toBe("");
+  });
+});
+
+describe("extractLastBraceBlock", () => {
+  it("extracts the last top-level JSON object", () => {
+    const text = 'text {"a":1} more text {"b":2}';
+    expect(extractLastBraceBlock(text)).toBe('{"b":2}');
+  });
+
+  it("returns null when no braces found", () => {
+    expect(extractLastBraceBlock("no json here")).toBeNull();
+  });
+
+  it("handles nested braces", () => {
+    const text = '{"outer":{"inner":1}}';
+    expect(extractLastBraceBlock(text)).toBe('{"outer":{"inner":1}}');
+  });
+
+  it("handles braces inside string values", () => {
+    const text = '{"text":"has {braces} inside"}';
+    expect(extractLastBraceBlock(text)).toBe('{"text":"has {braces} inside"}');
+  });
+
+  it("handles escaped quotes inside strings", () => {
+    const text = '{"text":"say \\"hi\\""}';
+    expect(extractLastBraceBlock(text)).toBe('{"text":"say \\"hi\\""}');
+  });
+
+  it("returns null for unbalanced braces", () => {
+    expect(extractLastBraceBlock("{unclosed")).toBeNull();
+  });
+});
+
+describe("sanitizeJsonNewlines", () => {
+  it("returns unchanged string when no literal newlines in JSON strings", () => {
+    expect(sanitizeJsonNewlines('{"a":"hello"}')).toBe('{"a":"hello"}');
+  });
+
+  it("replaces literal newline inside a JSON string with escaped \\n", () => {
+    expect(sanitizeJsonNewlines('{"a":"x\ny"}')).toBe('{"a":"x\\ny"}');
+  });
+
+  it("does not replace newlines outside of JSON strings", () => {
+    const input = '{\n"a": "hello"\n}';
+    expect(sanitizeJsonNewlines(input)).toBe(input);
+  });
+
+  it("handles escaped quotes correctly", () => {
+    const input = '{"text":"say \\"hi\\"\\nbye"}';
+    expect(sanitizeJsonNewlines(input)).toBe(input);
+  });
+
+  it("handles multiple literal newlines in multiple strings", () => {
+    expect(sanitizeJsonNewlines('{"a":"x\ny","b":"p\nq"}')).toBe('{"a":"x\\ny","b":"p\\nq"}');
   });
 });

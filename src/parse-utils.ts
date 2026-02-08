@@ -54,6 +54,92 @@ export function extractFencedBlock(text: string, language: string): string | nul
 	return null;
 }
 
+/**
+ * Extract the last top-level brace-delimited block from text.
+ * Quote-aware: braces inside JSON string values are ignored.
+ */
+export function extractLastBraceBlock(text: string): string | null {
+	let depth = 0;
+	let lastStart = -1;
+	let lastEnd = -1;
+	let inString = false;
+	let escape = false;
+
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+
+		if (escape) {
+			escape = false;
+			continue;
+		}
+		if (ch === "\\") {
+			escape = true;
+			continue;
+		}
+		if (ch === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+
+		if (ch === "{") {
+			if (depth === 0) lastStart = i;
+			depth++;
+		} else if (ch === "}") {
+			depth--;
+			if (depth === 0 && lastStart >= 0) {
+				lastEnd = i;
+			}
+		}
+	}
+
+	if (lastStart >= 0 && lastEnd > lastStart) {
+		return text.slice(lastStart, lastEnd + 1);
+	}
+	return null;
+}
+
+/**
+ * Replace literal newline characters (0x0a) inside JSON string values
+ * with the two-character escape sequence \\n so JSON.parse succeeds.
+ */
+export function sanitizeJsonNewlines(jsonStr: string): string {
+	let result = "";
+	let inString = false;
+	let escape = false;
+
+	for (let i = 0; i < jsonStr.length; i++) {
+		const ch = jsonStr[i];
+
+		if (escape) {
+			escape = false;
+			result += ch;
+			continue;
+		}
+
+		if (ch === "\\") {
+			escape = true;
+			result += ch;
+			continue;
+		}
+
+		if (ch === '"') {
+			inString = !inString;
+			result += ch;
+			continue;
+		}
+
+		if (ch === "\n" && inString) {
+			result += "\\n";
+			continue;
+		}
+
+		result += ch;
+	}
+
+	return result;
+}
+
 function escapeRegExp(str: string): string {
 	return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
