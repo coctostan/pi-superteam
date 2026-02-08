@@ -1,0 +1,4 @@
+# Keep rg/fd searches focused on source code
+docs/plans/archive/
+docs/plans/*.md
+*.tgz
