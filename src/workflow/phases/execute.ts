@@ -157,27 +157,59 @@ export async function runExecutePhase(
 			continue;
 		}
 
-		// c. VALIDATION GATE
-		const config = getConfig(ctx.cwd);
-		const validationCommand = config.validationCommand || "";
-		if (validationCommand) {
-			const valResult = await runValidation(validationCommand, ctx.cwd);
-			if (!valResult.success) {
-				const reason = `Validation failed: ${valResult.error || "command exited with non-zero"}`;
-				const escalation = await escalate(task, reason, ui, ctx.cwd);
-				if (escalation === "abort") {
-					state.error = "Aborted by user";
-					saveState(state, ctx.cwd);
-					return state;
+		// c. VALIDATION GATE (with auto-fix retry)
+		{
+			const valConfig = getConfig(ctx.cwd);
+			const validationCommand = valConfig.validationCommand || "";
+			if (validationCommand) {
+				const valResult = await runValidation(validationCommand, ctx.cwd);
+				if (!valResult.success) {
+					// Auto-fix attempt: dispatch implementer with error details
+					if (implementer) {
+						ui?.notify?.("Validation failed, attempting auto-fix...", "warning");
+						const fixPrompt = `Fix these validation errors for task "${task.title}":\n\n${valResult.error}\n\nRun the validation command to verify: ${validationCommand}`;
+						const fixResult = await dispatchAgent(
+							implementer, fixPrompt, ctx.cwd, signal, undefined, makeOnStreamEvent(),
+						);
+						state.totalCostUsd += fixResult.usage.cost;
+
+						// Re-run validation after fix (re-read config for testability)
+						const revalConfig = getConfig(ctx.cwd);
+						const revalCommand = revalConfig.validationCommand || "";
+						const revalResult = revalCommand ? await runValidation(revalCommand, ctx.cwd) : { success: true };
+						if (!revalResult.success) {
+							const reason = `Validation still failing after auto-fix: ${revalResult.error || "command exited with non-zero"}`;
+							const escalation = await escalate(task, reason, ui, ctx.cwd);
+							if (escalation === "abort") {
+								state.error = "Aborted by user";
+								saveState(state, ctx.cwd);
+								return state;
+							}
+							if (escalation === "skip") {
+								task.status = "skipped";
+								saveState(state, ctx.cwd);
+								continue;
+							}
+							task.status = "pending";
+							continue;
+						}
+					} else {
+						const reason = `Validation failed: ${valResult.error || "command exited with non-zero"}`;
+						const escalation = await escalate(task, reason, ui, ctx.cwd);
+						if (escalation === "abort") {
+							state.error = "Aborted by user";
+							saveState(state, ctx.cwd);
+							return state;
+						}
+						if (escalation === "skip") {
+							task.status = "skipped";
+							saveState(state, ctx.cwd);
+							continue;
+						}
+						task.status = "pending";
+						continue;
+					}
 				}
-				if (escalation === "skip") {
-					task.status = "skipped";
-					saveState(state, ctx.cwd);
-					continue;
-				}
-				// retry
-				task.status = "pending";
-				continue;
 			}
 		}
 

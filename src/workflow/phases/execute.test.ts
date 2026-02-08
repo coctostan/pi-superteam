@@ -779,16 +779,19 @@ describe("runExecutePhase", () => {
 
 			expect(ctx.ui.select).toHaveBeenCalled();
 			const selectCall = ctx.ui.select.mock.calls[0];
-			expect(selectCall[0]).toContain("Validation failed");
+			expect(selectCall[0]).toContain("Validation");
 			expect(result.tasks[0].status).toBe("skipped");
 		});
 
 		it("retries after validation failure when user selects Retry", async () => {
 			setupDefaultMocks();
-			// First validation fails, second passes (on retry of same task)
-			mockGetConfig
-				.mockReturnValueOnce({ validationCommand: "false" } as any)
-				.mockReturnValue({ validationCommand: "true" } as any);
+			// Auto-fix also fails: first 2 getConfig calls return "false" (initial + re-val),
+			// subsequent calls (retry loop) return "true"
+			let callCount = 0;
+			mockGetConfig.mockImplementation(() => {
+				callCount++;
+				return { validationCommand: callCount <= 2 ? "false" : "true" } as any;
+			});
 
 			const ctx = makeCtx("/tmp");
 			ctx.ui.select.mockResolvedValueOnce("Retry");
@@ -799,9 +802,44 @@ describe("runExecutePhase", () => {
 			});
 			const result = await runExecutePhase(state, ctx);
 
-			// Task 1 was set to "pending" on retry, task 2 completes
+			// Escalation after auto-fix fails, user retries, task 2 completes
 			expect(ctx.ui.select).toHaveBeenCalledTimes(1);
 			expect(result.tasks[1].status).toBe("complete");
+		});
+
+		it("auto-fix retry: dispatches implementer with error on first validation failure, then re-validates", async () => {
+			setupDefaultMocks();
+
+			// Validation fails first, passes second (after auto-fix)
+			let validationCallCount = 0;
+			mockGetConfig.mockImplementation(() => {
+				validationCallCount++;
+				return { validationCommand: validationCallCount <= 1 ? "false" : "true" } as any;
+			});
+
+			const ctx = makeCtx("/tmp");
+			const state = makeState();
+			const result = await runExecutePhase(state, ctx);
+
+			// Should have dispatched implementer at least twice (impl + auto-fix)
+			const implCalls = mockDispatchAgent.mock.calls.filter(c => c[0].name === "implementer");
+			expect(implCalls.length).toBeGreaterThanOrEqual(2);
+			// Task should complete (validation passed on retry)
+			expect(result.tasks[0].status).toBe("complete");
+		});
+
+		it("auto-fix retry: escalates after auto-fix still fails validation", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({ validationCommand: "false" } as any);
+
+			const ctx = makeCtx("/tmp");
+			ctx.ui.select.mockResolvedValue("Skip");
+			const state = makeState();
+			const result = await runExecutePhase(state, ctx);
+
+			// After auto-fix attempt, validation still fails → escalate
+			expect(ctx.ui.select).toHaveBeenCalled();
+			expect(result.tasks[0].status).toBe("skipped");
 		});
 	});
 
