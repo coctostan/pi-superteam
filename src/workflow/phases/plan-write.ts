@@ -30,6 +30,24 @@ export async function runPlanWritePhase(
 		return state;
 	}
 
+	// Fallback: if no designPath, search docs/plans/ for most recent *-design.md
+	if (!state.designPath && !state.designContent) {
+		const plansDir = path.join(ctx.cwd, "docs/plans");
+		try {
+			const files = fs.readdirSync(plansDir)
+				.filter((f: string) => f.endsWith("-design.md"))
+				.sort()
+				.reverse();
+			if (files.length > 0) {
+				const designFile = files[0];
+				state.designPath = `docs/plans/${designFile}`;
+				state.designContent = fs.readFileSync(path.join(plansDir, designFile), "utf-8");
+			}
+		} catch {
+			// docs/plans/ doesn't exist — continue with empty design
+		}
+	}
+
 	const scoutOutput = state.brainstorm?.scoutOutput || "";
 	const designContent = state.designContent || "";
 

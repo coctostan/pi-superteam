@@ -231,4 +231,53 @@ describe("runPlanWritePhase", () => {
     expect(firstDispatchCall.length).toBeGreaterThanOrEqual(6);
     expect(firstDispatchCall[5]).toBeDefined();
   });
+
+  it("falls back to searching docs/plans/ for recent design file when designPath is undefined", async () => {
+    const { runPlanWritePhase } = await import("./plan-write.js");
+    const ctx = { cwd: tmpDir, hasUI: true, ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() } } as any;
+
+    // Create a design file in docs/plans/
+    const planDir = path.join(tmpDir, "docs/plans");
+    fs.mkdirSync(planDir, { recursive: true });
+    fs.writeFileSync(path.join(planDir, "2026-02-07-auth-design.md"), "# Design\nSome design content");
+
+    mockDispatchAgent.mockImplementation(async () => {
+      // The plan path should be derived from the discovered design file
+      const today = new Date().toISOString().slice(0, 10);
+      fs.writeFileSync(
+        path.join(planDir, "2026-02-07-auth-plan.md"),
+        "```superteam-tasks\n- title: T\n  description: D\n  files: [a.ts]\n```"
+      );
+      return makeDispatchResult();
+    });
+
+    const state = makeState({ designPath: undefined, designContent: undefined });
+    const result = await runPlanWritePhase(state, ctx);
+
+    expect(result.tasks).toHaveLength(1);
+    expect(result.phase).toBe("plan-review");
+  });
+
+  it("generates a date-based plan path when designPath is undefined and no design file found", async () => {
+    const { runPlanWritePhase } = await import("./plan-write.js");
+    const ctx = { cwd: tmpDir, hasUI: true, ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() } } as any;
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    mockDispatchAgent.mockImplementation(async () => {
+      const planDir = path.join(tmpDir, "docs/plans");
+      fs.mkdirSync(planDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(planDir, `${today}-plan.md`),
+        "```superteam-tasks\n- title: T\n  description: D\n  files: [a.ts]\n```"
+      );
+      return makeDispatchResult();
+    });
+
+    const state = makeState({ designPath: undefined, designContent: undefined });
+    const result = await runPlanWritePhase(state, ctx);
+
+    expect(result.planPath).toBeDefined();
+    expect(result.planPath).toContain("plan.md");
+  });
 });
