@@ -5,4 +5,5 @@ dist/
 *.d.ts
 !src/**/*.d.ts
 .superteam.json
+.superteam-workflow.json
 *.tgz
