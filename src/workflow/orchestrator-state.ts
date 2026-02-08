@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { writeProgressFile } from "./progress.js";
+import type { TestBaseline } from "./test-baseline.js";
 
 const STATE_FILE = ".superteam-workflow.json";
 
@@ -104,6 +105,7 @@ export type OrchestratorState = {
   /** @deprecated Kept for backward compatibility. Use ctx.ui.* instead. */
   pendingInteraction?: PendingInteraction;
   error?: string;
+  testBaseline?: TestBaseline;
 };
 
 export function createInitialState(description: string): OrchestratorState {
