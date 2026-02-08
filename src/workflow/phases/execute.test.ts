@@ -18,6 +18,7 @@ vi.mock("../orchestrator-state.js", async (importOriginal) => {
 vi.mock("../git-utils.js", () => ({
 	getCurrentSha: vi.fn(),
 	computeChangedFiles: vi.fn(),
+	resetToSha: vi.fn(),
 }));
 
 vi.mock("../../review-parser.js", async (importOriginal) => {
@@ -27,7 +28,7 @@ vi.mock("../../review-parser.js", async (importOriginal) => {
 
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget } from "../../dispatch.ts";
 import { saveState } from "../orchestrator-state.ts";
-import { getCurrentSha, computeChangedFiles } from "../git-utils.ts";
+import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.ts";
 import { parseReviewOutput, hasCriticalFindings } from "../../review-parser.ts";
 import { runExecutePhase } from "./execute.ts";
 import type { AgentProfile, DispatchResult, CostCheckResult } from "../../dispatch.ts";
@@ -40,6 +41,7 @@ const mockCheckCostBudget = vi.mocked(checkCostBudget);
 const mockSaveState = vi.mocked(saveState);
 const mockGetCurrentSha = vi.mocked(getCurrentSha);
 const mockComputeChangedFiles = vi.mocked(computeChangedFiles);
+const mockResetToSha = vi.mocked(resetToSha);
 const mockParseReviewOutput = vi.mocked(parseReviewOutput);
 const mockHasCriticalFindings = vi.mocked(hasCriticalFindings);
 
@@ -641,6 +643,93 @@ describe("runExecutePhase", () => {
 			await runExecutePhase(state, ctx);
 
 			expect(ctx.ui.setWidget).toHaveBeenCalledWith("workflow-progress", expect.any(Array));
+		});
+	});
+
+	// --- Escalate with rollback option ---
+
+	describe("escalate with rollback option", () => {
+		it("offers Rollback alongside Retry/Skip/Abort", async () => {
+			setupDefaultMocks();
+			mockGetCurrentSha.mockResolvedValue("abc123sha");
+			const state = makeState();
+			const ctx = makeCtx();
+
+			mockDispatchAgent.mockResolvedValue(makeResult({ exitCode: 1, errorMessage: "Failed" }));
+			mockResetToSha.mockResolvedValue(true);
+
+			// User selects Rollback first → triggers resetToSha, then on retry the impl fails again → Skip
+			ctx.ui.select
+				.mockResolvedValueOnce("Rollback")
+				.mockResolvedValueOnce("Skip");
+
+			const result = await runExecutePhase(state, ctx);
+
+			// Verify Rollback was offered in the select options
+			const selectCalls = ctx.ui.select.mock.calls;
+			expect(selectCalls[0][1]).toContain("Rollback");
+
+			// Verify resetToSha was called with the saved SHA
+			expect(mockResetToSha).toHaveBeenCalledWith(ctx.cwd, "abc123sha");
+		});
+
+		it("resets to saved SHA and retries when Rollback selected", async () => {
+			setupDefaultMocks();
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const ctx = makeCtx();
+
+			// First impl fails, user selects Rollback, second impl (retry) succeeds,
+			// then remaining dispatches succeed
+			let implCallCount = 0;
+			mockDispatchAgent.mockImplementation(async (agent) => {
+				if (agent.name === "implementer") {
+					implCallCount++;
+					if (implCallCount === 1) {
+						return makeResult({ exitCode: 1, errorMessage: "Failed" });
+					}
+				}
+				return makeResult({ exitCode: 0 });
+			});
+			mockResetToSha.mockResolvedValue(true);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass",
+				findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
+			ctx.ui.select.mockResolvedValueOnce("Rollback");
+
+			const result = await runExecutePhase(state, ctx);
+
+			expect(mockResetToSha).toHaveBeenCalled();
+			// The impl was dispatched at least twice (first fail + retry)
+			const implCalls = mockDispatchAgent.mock.calls.filter(c => c[0].name === "implementer");
+			expect(implCalls.length).toBeGreaterThanOrEqual(2);
+		});
+
+		it("includes Rollback option in all escalation contexts", async () => {
+			setupDefaultMocks();
+			// Make spec review fail repeatedly to trigger escalation
+			mockParseReviewOutput.mockReturnValue({
+				status: "fail",
+				findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" },
+			});
+
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
+			const state = makeState({
+				config: {
+					tddMode: "tdd", reviewMode: "iterative", executionMode: "auto",
+					batchSize: 3, maxPlanReviewCycles: 3, maxTaskReviewCycles: 2,
+				},
+			});
+			await runExecutePhase(state, ctx);
+
+			// All escalation calls should include Rollback
+			for (const call of ctx.ui.select.mock.calls) {
+				expect(call[1]).toContain("Rollback");
+			}
 		});
 	});
 });

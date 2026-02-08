@@ -1,7 +1,7 @@
 import type { OrchestratorState, TaskExecState } from "../orchestrator-state.js";
 import { saveState } from "../orchestrator-state.js";
 import { buildImplPrompt, buildFixPrompt, buildSpecReviewPrompt, buildQualityReviewPrompt, extractPlanContext } from "../prompt-builder.js";
-import { getCurrentSha, computeChangedFiles } from "../git-utils.js";
+import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.js";
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, type AgentProfile, type OnStreamEvent } from "../../dispatch.js";
 import { parseReviewOutput, formatFindings, hasCriticalFindings, type ReviewFindings, type ParseResult } from "../../review-parser.js";
 import { formatToolAction, formatTaskProgress, createActivityBuffer } from "../ui.js";
@@ -98,7 +98,7 @@ export async function runExecutePhase(
 
 		// b. IMPLEMENT
 		if (!implementer) {
-			const escalation = await escalate(task, "No implementer agent found", ui);
+			const escalation = await escalate(task, "No implementer agent found", ui, ctx.cwd);
 			if (escalation === "abort") {
 				state.error = "Aborted by user";
 				saveState(state, ctx.cwd);
@@ -124,7 +124,7 @@ export async function runExecutePhase(
 
 		if (implResult.exitCode !== 0) {
 			const reason = implResult.errorMessage || "Implementation failed (non-zero exit)";
-			const escalation = await escalate(task, reason, ui);
+			const escalation = await escalate(task, reason, ui, ctx.cwd);
 			if (escalation === "abort") {
 				state.error = "Aborted by user";
 				saveState(state, ctx.cwd);
@@ -179,7 +179,7 @@ export async function runExecutePhase(
 				} else if (parsed.status === "fail") {
 					task.reviewsFailed.push(reviewName);
 					if (hasCriticalFindings(parsed.findings)) {
-						const escalation = await escalate(task, `Critical findings from ${reviewName}`, ui);
+						const escalation = await escalate(task, `Critical findings from ${reviewName}`, ui, ctx.cwd);
 						if (escalation === "abort") {
 							state.error = "Aborted by user";
 							saveState(state, ctx.cwd);
@@ -234,6 +234,7 @@ async function escalate(
 	task: TaskExecState,
 	reason: string,
 	ui: any,
+	cwd: string,
 ): Promise<"retry" | "skip" | "abort"> {
 	if (!ui?.select) {
 		// No UI — default to skip
@@ -242,11 +243,17 @@ async function escalate(
 
 	const choice = await ui.select(
 		`Task "${task.title}" needs attention: ${reason}`,
-		["Retry", "Skip", "Abort"],
+		["Retry", "Rollback", "Skip", "Abort"],
 	);
 
 	if (choice === "Abort") return "abort";
 	if (choice === "Skip") return "skip";
+	if (choice === "Rollback") {
+		if (task.gitShaBeforeImpl) {
+			await resetToSha(cwd, task.gitShaBeforeImpl);
+		}
+		return "retry";
+	}
 	return "retry";
 }
 
@@ -291,7 +298,7 @@ async function runReviewLoop(
 		}
 
 		if (parsed.status === "inconclusive") {
-			const escalation = await escalate(task, `${reviewType} review was inconclusive: ${parsed.parseError}`, ui);
+			const escalation = await escalate(task, `${reviewType} review was inconclusive: ${parsed.parseError}`, ui, ctx.cwd);
 			if (escalation === "abort") {
 				state.error = "Aborted by user";
 				saveState(state, ctx.cwd);
@@ -322,7 +329,7 @@ async function runReviewLoop(
 			task.status = "reviewing";
 			saveState(state, ctx.cwd);
 		} else {
-			const escalation = await escalate(task, `${reviewType} review failed after ${maxRetries} attempts`, ui);
+			const escalation = await escalate(task, `${reviewType} review failed after ${maxRetries} attempts`, ui, ctx.cwd);
 			if (escalation === "abort") {
 				state.error = "Aborted by user";
 				saveState(state, ctx.cwd);
