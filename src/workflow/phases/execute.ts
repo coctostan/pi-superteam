@@ -150,8 +150,13 @@ export async function runExecutePhase(
 		task.status = "implementing";
 		saveState(state, ctx.cwd);
 
+		// Collect prior task summaries for context forwarding (D6)
+		const priorTasks = state.tasks
+			.filter(t => t.status === "complete" && t.summary)
+			.map(t => t.summary!);
+
 		const implResult = await dispatchAgent(
-			implementer, buildImplPrompt(task, planContext), ctx.cwd, signal, undefined, makeOnStreamEvent(),
+			implementer, buildImplPrompt(task, planContext, undefined, priorTasks), ctx.cwd, signal, undefined, makeOnStreamEvent(),
 		);
 		state.totalCostUsd += implResult.usage.cost;
 

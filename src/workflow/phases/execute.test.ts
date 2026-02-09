@@ -682,6 +682,31 @@ describe("runExecutePhase", () => {
 		});
 	});
 
+	// --- Context forwarding (D6) ---
+
+	describe("context forwarding (D6)", () => {
+		it("passes prior completed task summaries to buildImplPrompt", async () => {
+			setupDefaultMocks();
+
+			const state = makeState({
+				tasks: [
+					makeTask({ id: 1, title: "Task 1", status: "complete", summary: { title: "Task 1", status: "complete", changedFiles: ["src/a.ts"] } }),
+					makeTask({ id: 2, title: "Task 2", status: "pending" }),
+				],
+				currentTaskIndex: 1,
+			});
+
+			const result = await runExecutePhase(state, fakeCtx);
+
+			// Check that the impl dispatch for Task 2 includes prior context
+			const implCalls = mockDispatchAgent.mock.calls.filter(c => c[0].name === "implementer");
+			expect(implCalls.length).toBeGreaterThanOrEqual(1);
+			const implPrompt = implCalls[0][1];
+			expect(implPrompt).toContain("Prior tasks");
+			expect(implPrompt).toContain("Task 1");
+		});
+	});
+
 	// --- Execution modes ---
 
 	describe("execution modes", () => {
