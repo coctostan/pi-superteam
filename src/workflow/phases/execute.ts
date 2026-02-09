@@ -248,20 +248,14 @@ export async function runExecutePhase(
 		// d. CHANGED FILES
 		let changedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
 
-		// e. SPEC REVIEW
-		const specResult = await runReviewLoop(
-			state, task, "spec", specReviewer, implementer, changedFiles, maxRetries, ctx, signal, ui, makeOnStreamEvent,
-			(t, cf) => buildSpecReviewPrompt(t, cf),
-		);
-		if (specResult === "escalated") return state;
-		changedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
-
-		// f. QUALITY REVIEW
-		const qualResult = await runReviewLoop(
-			state, task, "quality", qualityReviewer, implementer, changedFiles, maxRetries, ctx, signal, ui, makeOnStreamEvent,
-			(t, cf) => buildQualityReviewPrompt(t, cf),
-		);
-		if (qualResult === "escalated") return state;
+		// e+f. PARALLEL SPEC + QUALITY REVIEW
+		{
+			const reviewResult = await runParallelReviewLoop(
+				state, task, specReviewer, qualityReviewer, implementer,
+				changedFiles, maxRetries, ctx, signal, ui, makeOnStreamEvent,
+			);
+			if (reviewResult === "escalated") return state;
+		}
 
 		// g. OPTIONAL REVIEWS
 		if (optionalReviewers.length > 0) {
@@ -396,6 +390,112 @@ export async function runExecutePhase(
 	state.phase = "finalize";
 	saveState(state, ctx.cwd);
 	return state;
+}
+
+// --- Parallel review loop (D4) ---
+
+async function runParallelReviewLoop(
+	state: OrchestratorState,
+	task: TaskExecState,
+	specReviewer: AgentProfile | undefined,
+	qualityReviewer: AgentProfile | undefined,
+	implementer: AgentProfile,
+	changedFiles: string[],
+	maxRetries: number,
+	ctx: { cwd: string },
+	signal: AbortSignal | undefined,
+	ui: any,
+	makeOnStreamEvent: () => OnStreamEvent,
+): Promise<"passed" | "escalated"> {
+	// Build list of available reviewers
+	const reviewers: AgentProfile[] = [];
+	const reviewNames: string[] = [];
+	if (specReviewer) { reviewers.push(specReviewer); reviewNames.push("spec"); }
+	if (qualityReviewer) { reviewers.push(qualityReviewer); reviewNames.push("quality"); }
+
+	if (reviewers.length === 0) {
+		task.reviewsPassed.push("spec", "quality");
+		return "passed";
+	}
+
+	task.status = "reviewing";
+	saveState(state, ctx.cwd);
+
+	let currentChangedFiles = changedFiles;
+
+	for (let attempt = 0; attempt < maxRetries; attempt++) {
+		// Build prompts for each reviewer
+		const prompts = reviewers.map((_, i) => {
+			if (reviewNames[i] === "spec") return buildSpecReviewPrompt(task, currentChangedFiles);
+			return buildQualityReviewPrompt(task, currentChangedFiles);
+		});
+
+		// Dispatch in parallel
+		const results = await dispatchParallel(reviewers, prompts, ctx.cwd, signal);
+		for (const r of results) {
+			state.totalCostUsd += r.usage.cost;
+		}
+
+		// Write-guard check on parallel results
+		for (let j = 0; j < results.length; j++) {
+			if (hasWriteToolCalls(results[j].messages)) {
+				ui?.notify?.(`Reviewer ${reviewNames[j]} attempted write operations — results may be tainted`, "warning");
+			}
+		}
+
+		// Parse results
+		const parsed: ParseResult[] = results.map(r => {
+			const output = getFinalOutput(r.messages);
+			return parseReviewOutput(output);
+		});
+
+		// Check if all passed
+		const allPassed = parsed.every(p => p.status === "pass");
+		if (allPassed) {
+			for (const name of reviewNames) {
+				if (!task.reviewsPassed.includes(name)) task.reviewsPassed.push(name);
+			}
+			return "passed";
+		}
+
+		// Check for inconclusive
+		const inconclusiveIdx = parsed.findIndex(p => p.status === "inconclusive");
+		if (inconclusiveIdx >= 0) {
+			const p = parsed[inconclusiveIdx] as { status: "inconclusive"; parseError: string };
+			const escalation = await escalate(task, `${reviewNames[inconclusiveIdx]} review inconclusive: ${p.parseError}`, ui, ctx.cwd);
+			if (escalation === "abort") { state.error = "Aborted by user"; saveState(state, ctx.cwd); return "escalated"; }
+			if (escalation === "skip") { task.status = "skipped"; saveState(state, ctx.cwd); return "escalated"; }
+			continue;
+		}
+
+		// At least one failed — fix and retry
+		if (attempt < maxRetries - 1) {
+			task.status = "fixing";
+			task.fixAttempts++;
+			saveState(state, ctx.cwd);
+
+			// Find first failure's findings for the fix prompt
+			const failIdx = parsed.findIndex(p => p.status === "fail");
+			const failParsed = parsed[failIdx] as { status: "fail"; findings: ReviewFindings };
+
+			const fixResult = await dispatchAgent(
+				implementer,
+				buildFixPrompt(task, reviewNames[failIdx], failParsed.findings, currentChangedFiles),
+				ctx.cwd, signal, undefined, makeOnStreamEvent(),
+			);
+			state.totalCostUsd += fixResult.usage.cost;
+
+			currentChangedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
+			task.status = "reviewing";
+			saveState(state, ctx.cwd);
+		} else {
+			const escalation = await escalate(task, `Reviews failed after ${maxRetries} attempts`, ui, ctx.cwd);
+			if (escalation === "abort") { state.error = "Aborted by user"; saveState(state, ctx.cwd); return "escalated"; }
+			if (escalation === "skip") { task.status = "skipped"; saveState(state, ctx.cwd); return "escalated"; }
+		}
+	}
+
+	return "passed";
 }
 
 // --- Escalation via ctx.ui.select ---

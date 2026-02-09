@@ -152,6 +152,7 @@ function setupDefaultMocks() {
 		findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
 	});
 	mockSquashTaskCommits.mockResolvedValue({ sha: "squashed123", success: true });
+	mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
 	mockGetConfig.mockReturnValue({ validationCommand: "", testCommand: "", validationCadence: "every", validationInterval: 3 } as any);
 	mockShouldRunValidation.mockReturnValue(false);
 	mockResolveFailureAction.mockImplementation((type) => {
@@ -300,8 +301,13 @@ describe("runExecutePhase", () => {
 	// --- Spec review ---
 
 	describe("spec review", () => {
-		it("passes spec review and proceeds to quality review", async () => {
+		it("passes both spec and quality reviews in parallel", async () => {
 			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
 			const state = makeState();
 			const result = await runExecutePhase(state, fakeCtx);
 
@@ -310,13 +316,10 @@ describe("runExecutePhase", () => {
 			expect(result.tasks[0].status).toBe("complete");
 		});
 
-		it("retries on spec review failure with fix loop", async () => {
+		it("retries on review failure with parallel fix loop", async () => {
 			setupDefaultMocks();
-			// impl succeeds, then spec fails, then spec passes
-			let specCallCount = 0;
-			mockDispatchAgent.mockImplementation(async (agent) => {
-				return makeResult();
-			});
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			// First round: spec fails. After fix, both pass.
 			mockParseReviewOutput
 				.mockReturnValueOnce({
 					status: "fail",
@@ -336,10 +339,12 @@ describe("runExecutePhase", () => {
 
 			expect(result.tasks[0].fixAttempts).toBe(1);
 			expect(result.tasks[0].reviewsPassed).toContain("spec");
+			expect(result.tasks[0].reviewsPassed).toContain("quality");
 		});
 
-		it("escalates after max spec review retries", async () => {
+		it("escalates after max review retries", async () => {
 			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
 			mockParseReviewOutput.mockReturnValue({
 				status: "fail",
 				findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" },
@@ -358,8 +363,9 @@ describe("runExecutePhase", () => {
 			expect(ctx.ui.select).toHaveBeenCalled();
 		});
 
-		it("escalates on inconclusive spec review", async () => {
+		it("escalates on inconclusive review", async () => {
 			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
 			mockParseReviewOutput.mockReturnValue({
 				status: "inconclusive",
 				rawOutput: "garbage",
@@ -378,28 +384,32 @@ describe("runExecutePhase", () => {
 	// --- Quality review ---
 
 	describe("quality review", () => {
-		it("runs quality review after spec review passes", async () => {
+		it("dispatches spec and quality reviewers together in parallel", async () => {
 			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
 			const state = makeState();
 			const result = await runExecutePhase(state, fakeCtx);
 
-			// Should have dispatched: implementer, spec-reviewer, quality-reviewer
-			const dispatched = mockDispatchAgent.mock.calls.map(c => c[0].name);
-			expect(dispatched).toContain("spec-reviewer");
-			expect(dispatched).toContain("quality-reviewer");
-			// Spec-reviewer dispatched before quality-reviewer
-			const specIdx = dispatched.indexOf("spec-reviewer");
-			const qualIdx = dispatched.indexOf("quality-reviewer");
-			expect(specIdx).toBeLessThan(qualIdx);
+			// Both reviewers dispatched via dispatchParallel
+			expect(mockDispatchParallel).toHaveBeenCalled();
+			const parallelCall = mockDispatchParallel.mock.calls[0];
+			const agentNames = parallelCall[0].map((a: any) => a.name);
+			expect(agentNames).toContain("spec-reviewer");
+			expect(agentNames).toContain("quality-reviewer");
 		});
 
-		it("retries on quality review failure with fix loop", async () => {
+		it("retries on quality review failure with fix loop (parallel re-review)", async () => {
 			setupDefaultMocks();
-			// spec passes, quality fails once then passes
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			// First parallel: spec passes, quality fails. Second parallel: both pass.
 			mockParseReviewOutput
-				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec
-				.mockReturnValueOnce({ status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad quality" }], mustFix: ["fix"], summary: "fail" } }) // quality first
-				.mockReturnValue({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }); // quality retry
+				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec (round 1)
+				.mockReturnValueOnce({ status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad quality" }], mustFix: ["fix"], summary: "fail" } }) // quality (round 1)
+				.mockReturnValue({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }); // all pass (round 2)
 
 			const state = makeState();
 			const result = await runExecutePhase(state, fakeCtx);
@@ -408,11 +418,13 @@ describe("runExecutePhase", () => {
 			expect(result.tasks[0].fixAttempts).toBe(1);
 		});
 
-		it("escalates after max quality review retries", async () => {
+		it("escalates after max review retries (parallel)", async () => {
 			setupDefaultMocks();
-			mockParseReviewOutput
-				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec passes
-				.mockReturnValue({ status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" } }); // quality always fails
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			// All reviews fail
+			mockParseReviewOutput.mockReturnValue({
+				status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" },
+			});
 
 			const ctx = makeCtx();
 			ctx.ui.select.mockResolvedValue("Skip");
@@ -459,11 +471,14 @@ describe("runExecutePhase", () => {
 				],
 				projectAgentsDir: null,
 			});
-			mockDispatchParallel.mockResolvedValue([makeResult()]);
+			// First call: spec+quality parallel (pass), second call: optional parallel (fail)
+			mockDispatchParallel
+				.mockResolvedValueOnce([makeResult(), makeResult()])  // spec+quality
+				.mockResolvedValueOnce([makeResult()]);               // optional (security)
 			mockGetFinalOutput.mockReturnValue('{"passed":false,"findings":[{"severity":"critical","file":"a.ts","issue":"vuln"}],"mustFix":[],"summary":"critical issue"}');
 			mockParseReviewOutput
-				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec
-				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // quality
+				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec (parallel)
+				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // quality (parallel)
 				.mockReturnValueOnce({
 					status: "fail",
 					findings: { passed: false, findings: [{ severity: "critical", file: "a.ts", issue: "vuln" }], mustFix: [], summary: "critical" },
@@ -480,10 +495,97 @@ describe("runExecutePhase", () => {
 
 		it("skips optional reviews when no optional reviewers available", async () => {
 			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
 			const state = makeState();
 			const result = await runExecutePhase(state, fakeCtx);
 
-			expect(mockDispatchParallel).not.toHaveBeenCalled();
+			// dispatchParallel called once for spec+quality, but NOT for optional reviewers
+			expect(mockDispatchParallel).toHaveBeenCalledTimes(1);
+			expect(result.tasks[0].status).toBe("complete");
+		});
+	});
+
+	// --- Parallel reviews (D4) ---
+
+	describe("parallel reviews (D4)", () => {
+		it("dispatches spec and quality reviews in parallel via dispatchParallel", async () => {
+			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockGetFinalOutput.mockReturnValue('```superteam-json\n{"passed":true,"findings":[],"mustFix":[],"summary":"ok"}\n```');
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			// dispatchParallel should be called for spec+quality
+			expect(mockDispatchParallel).toHaveBeenCalled();
+			const parallelCall = mockDispatchParallel.mock.calls[0];
+			const agentNames = parallelCall[0].map((a: any) => a.name);
+			expect(agentNames).toContain("spec-reviewer");
+			expect(agentNames).toContain("quality-reviewer");
+			expect(result.tasks[0].status).toBe("complete");
+		});
+
+		it("re-runs BOTH reviews after a fix when one fails", async () => {
+			setupDefaultMocks();
+			let parallelCallCount = 0;
+			mockDispatchParallel.mockImplementation(async () => {
+				parallelCallCount++;
+				return [makeResult(), makeResult()];
+			});
+
+			// First parallel: spec passes, quality fails. Second parallel: both pass.
+			mockParseReviewOutput
+				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } })
+				.mockReturnValueOnce({ status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" } })
+				.mockReturnValue({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } });
+
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			// Two parallel dispatches: initial + after fix
+			expect(parallelCallCount).toBe(2);
+			expect(result.tasks[0].status).toBe("complete");
+		});
+
+		it("escalates after maxRetries when reviews keep failing", async () => {
+			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "fail",
+				findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" },
+			});
+
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
+			const state = makeState({
+				config: {
+					tddMode: "tdd", reviewMode: "iterative", executionMode: "auto",
+					batchSize: 3, maxPlanReviewCycles: 3, maxTaskReviewCycles: 2,
+				},
+			});
+			const result = await runExecutePhase(state, ctx);
+
+			expect(ctx.ui.select).toHaveBeenCalled();
+			expect(result.tasks[0].status).toBe("skipped");
+		});
+
+		it("completes when both reviews pass first try — no fix loop", async () => {
+			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[0].fixAttempts).toBe(0);
 			expect(result.tasks[0].status).toBe("complete");
 		});
 	});
@@ -1253,22 +1355,24 @@ describe("runExecutePhase", () => {
 	// --- Reviewer write-guard ---
 
 	describe("reviewer write-guard", () => {
-		it("re-dispatches reviewer when hasWriteToolCalls returns true", async () => {
+		it("warns when parallel review results contain write tool calls", async () => {
 			setupDefaultMocks();
 			const mockHasWrite = vi.mocked(hasWriteToolCalls);
-			// First review call has writes, re-dispatch is clean
+			// First parallel result has writes
 			mockHasWrite
 				.mockReturnValueOnce(true)
 				.mockReturnValue(false);
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
 
 			const ctx = makeCtx();
 			const state = makeState();
 			const result = await runExecutePhase(state, ctx);
 
-			// Reviewer should have been dispatched twice for spec review (original + re-dispatch)
-			const reviewerCalls = mockDispatchAgent.mock.calls.filter(c => c[0].name === "spec-reviewer");
-			expect(reviewerCalls).toHaveLength(2);
 			expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("write operations"), "warning");
+			expect(result.tasks[0].status).toBe("complete");
 		});
 	});
 });
