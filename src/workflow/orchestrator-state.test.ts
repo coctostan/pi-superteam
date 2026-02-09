@@ -231,6 +231,39 @@ describe("orchestrator-state", () => {
     });
   });
 
+  describe("testBaseline state field", () => {
+    it("OrchestratorState accepts optional testBaseline", () => {
+      const state = createInitialState("test");
+      expect(state.testBaseline).toBeUndefined();
+    });
+
+    it("testBaseline round-trips through save/load", () => {
+      const state = createInitialState("test");
+      state.testBaseline = {
+        capturedAt: 1700000000000,
+        sha: "abc123",
+        command: "npx vitest run",
+        results: [
+          { name: "test-a", passed: true, duration: 5 },
+          { name: "test-b", passed: false, output: "error" },
+        ],
+        knownFailures: ["test-b"],
+      };
+      saveState(state, tmpDir);
+      const loaded = loadState(tmpDir);
+      expect(loaded!.testBaseline).toBeDefined();
+      expect(loaded!.testBaseline!.knownFailures).toEqual(["test-b"]);
+      expect(loaded!.testBaseline!.results).toHaveLength(2);
+    });
+
+    it("missing testBaseline in loaded state defaults to undefined", () => {
+      const state = createInitialState("test");
+      saveState(state, tmpDir);
+      const loaded = loadState(tmpDir);
+      expect(loaded!.testBaseline).toBeUndefined();
+    });
+  });
+
   describe("updated state model", () => {
     it("createInitialState starts in brainstorm phase", () => {
       const state = createInitialState("Build auth");

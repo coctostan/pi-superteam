@@ -6,6 +6,9 @@ import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkC
 import { parseReviewOutput, formatFindings, hasCriticalFindings, type ReviewFindings, type ParseResult } from "../../review-parser.js";
 import { formatToolAction, formatTaskProgress, createActivityBuffer } from "../ui.js";
 import { getConfig } from "../../config.js";
+import { runCrossTaskValidation, shouldRunValidation } from "../cross-task-validation.js";
+import { captureBaseline } from "../test-baseline.js";
+import { resolveFailureAction } from "../failure-taxonomy.js";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -93,6 +96,17 @@ export async function runExecutePhase(
 		};
 	};
 
+	// 4b. Capture test baseline if testCommand configured
+	{
+		const baselineConfig = getConfig(ctx.cwd);
+		const testCommand = baselineConfig.testCommand || "";
+		if (testCommand && !state.testBaseline) {
+			ui?.notify?.("Capturing test baseline...", "info");
+			state.testBaseline = await captureBaseline(testCommand, ctx.cwd);
+			saveState(state, ctx.cwd);
+		}
+	}
+
 	// 5. Task loop
 	let batchCounter = 0;
 
@@ -157,27 +171,73 @@ export async function runExecutePhase(
 			continue;
 		}
 
-		// c. VALIDATION GATE
-		const config = getConfig(ctx.cwd);
-		const validationCommand = config.validationCommand || "";
-		if (validationCommand) {
-			const valResult = await runValidation(validationCommand, ctx.cwd);
-			if (!valResult.success) {
-				const reason = `Validation failed: ${valResult.error || "command exited with non-zero"}`;
-				const escalation = await escalate(task, reason, ui, ctx.cwd);
-				if (escalation === "abort") {
-					state.error = "Aborted by user";
-					saveState(state, ctx.cwd);
-					return state;
+		// c. VALIDATION GATE (with auto-fix retry)
+		{
+			const valConfig = getConfig(ctx.cwd);
+			const validationCommand = valConfig.validationCommand || "";
+			if (validationCommand) {
+				const valResult = await runValidation(validationCommand, ctx.cwd);
+				if (!valResult.success) {
+					// Auto-fix attempt: dispatch implementer with error details
+					if (implementer) {
+						ui?.notify?.("Validation failed, attempting auto-fix...", "warning");
+						const fixPrompt = `Fix these validation errors for task "${task.title}":\n\n${valResult.error}\n\nRun the validation command to verify: ${validationCommand}`;
+						const fixResult = await dispatchAgent(
+							implementer, fixPrompt, ctx.cwd, signal, undefined, makeOnStreamEvent(),
+						);
+						state.totalCostUsd += fixResult.usage.cost;
+
+						// Re-run validation after fix (re-read config for testability)
+						const revalConfig = getConfig(ctx.cwd);
+						const revalCommand = revalConfig.validationCommand || "";
+						const revalResult = revalCommand ? await runValidation(revalCommand, ctx.cwd) : { success: true };
+						if (!revalResult.success) {
+							const valAction = resolveFailureAction("validation-failure");
+							if (valAction === "warn-continue") {
+								ui?.notify?.(`Validation still failing after auto-fix: ${revalResult.error || "command exited with non-zero"}`, "warning");
+							} else if (valAction === "ignore") {
+								// Skip escalation
+							} else {
+								const reason = `Validation still failing after auto-fix: ${revalResult.error || "command exited with non-zero"}`;
+								const escalation = await escalate(task, reason, ui, ctx.cwd);
+								if (escalation === "abort") {
+									state.error = "Aborted by user";
+									saveState(state, ctx.cwd);
+									return state;
+								}
+								if (escalation === "skip") {
+									task.status = "skipped";
+									saveState(state, ctx.cwd);
+									continue;
+								}
+								task.status = "pending";
+								continue;
+							}
+						}
+					} else {
+						const valAction = resolveFailureAction("validation-failure");
+						if (valAction === "warn-continue") {
+							ui?.notify?.(`Validation failed: ${valResult.error || "command exited with non-zero"}`, "warning");
+						} else if (valAction === "ignore") {
+							// Skip escalation
+						} else {
+							const reason = `Validation failed: ${valResult.error || "command exited with non-zero"}`;
+							const escalation = await escalate(task, reason, ui, ctx.cwd);
+							if (escalation === "abort") {
+								state.error = "Aborted by user";
+								saveState(state, ctx.cwd);
+								return state;
+							}
+							if (escalation === "skip") {
+								task.status = "skipped";
+								saveState(state, ctx.cwd);
+								continue;
+							}
+						}
+						task.status = "pending";
+						continue;
+					}
 				}
-				if (escalation === "skip") {
-					task.status = "skipped";
-					saveState(state, ctx.cwd);
-					continue;
-				}
-				// retry
-				task.status = "pending";
-				continue;
 			}
 		}
 
@@ -246,6 +306,60 @@ export async function runExecutePhase(
 
 		// Update progress widget
 		ui?.setWidget?.("workflow-progress", formatTaskProgress(state.tasks, i + 1));
+
+		// h2. CROSS-TASK VALIDATION
+		{
+			const crossConfig = getConfig(ctx.cwd);
+			const testCmd = crossConfig.testCommand || "";
+			if (testCmd && state.testBaseline) {
+				const valCadence = crossConfig.validationCadence || "every";
+				const valInterval = crossConfig.validationInterval || 3;
+				const completedCount = state.tasks.filter(t => t.status === "complete").length;
+
+				if (shouldRunValidation(valCadence, valInterval, completedCount)) {
+					const valResult = await runCrossTaskValidation(testCmd, state.testBaseline, ctx.cwd);
+
+					// Classify flakes via taxonomy
+					if (valResult.flakyTests.length > 0) {
+						const flakeAction = resolveFailureAction("test-flake");
+						if (flakeAction === "warn-continue") {
+							ui?.notify?.(`Detected flaky tests: ${valResult.flakyTests.join(", ")}`, "warning");
+						}
+					}
+
+					// Classify regressions via taxonomy
+					if (!valResult.passed) {
+						const regressionAction = resolveFailureAction("test-regression");
+						const failNames = valResult.blockingFailures.map(f => f.name).join(", ");
+
+						if (regressionAction === "stop-show-diff" || regressionAction === "escalate") {
+							const escalation = await escalate(
+								task,
+								`Task introduced test regression: ${failNames}`,
+								ui,
+								ctx.cwd,
+							);
+							if (escalation === "abort") {
+								state.error = "Aborted by user";
+								saveState(state, ctx.cwd);
+								return state;
+							}
+							if (escalation === "skip") {
+								task.status = "skipped";
+								saveState(state, ctx.cwd);
+								continue;
+							}
+							// Reset index so the task is retried
+							task.status = "pending";
+							state.currentTaskIndex = i;
+							i--;
+							saveState(state, ctx.cwd);
+							continue;
+						}
+					}
+				}
+			}
+		}
 
 		// h. EXECUTION MODE CHECK
 		batchCounter++;
