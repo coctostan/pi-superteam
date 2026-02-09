@@ -5,6 +5,7 @@ import { getCurrentSha, computeChangedFiles, resetToSha, squashTaskCommits } fro
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, hasWriteToolCalls, type AgentProfile, type OnStreamEvent } from "../../dispatch.js";
 import { parseReviewOutput, formatFindings, hasCriticalFindings, type ReviewFindings, type ParseResult } from "../../review-parser.js";
 import { formatToolAction, formatTaskProgress, createActivityBuffer } from "../ui.js";
+import { computeProgressSummary, formatProgressSummary } from "../progress.js";
 import { getConfig } from "../../config.js";
 import { runCrossTaskValidation, shouldRunValidation } from "../cross-task-validation.js";
 import { captureBaseline } from "../test-baseline.js";
@@ -312,6 +313,19 @@ export async function runExecutePhase(
 
 		state.currentTaskIndex = i + 1;
 		saveState(state, ctx.cwd);
+
+		// h1b. PROGRESS SUMMARY
+		{
+			const taskChangedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
+			task.summary = {
+				title: task.title,
+				status: task.status,
+				changedFiles: taskChangedFiles,
+			};
+			const summary = computeProgressSummary(state);
+			const formatted = formatProgressSummary(summary);
+			ui?.notify?.(formatted, "info");
+		}
 
 		// Update progress widget
 		ui?.setWidget?.("workflow-progress", formatTaskProgress(state.tasks, i + 1));

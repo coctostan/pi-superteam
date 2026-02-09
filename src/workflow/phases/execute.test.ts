@@ -56,6 +56,12 @@ vi.mock("../test-baseline.js", () => ({
 	captureBaseline: vi.fn(),
 }));
 
+vi.mock("../progress.js", () => ({
+	writeProgressFile: vi.fn(),
+	computeProgressSummary: vi.fn(),
+	formatProgressSummary: vi.fn(),
+}));
+
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, hasWriteToolCalls } from "../../dispatch.ts";
 import { saveState } from "../orchestrator-state.ts";
 import { getCurrentSha, computeChangedFiles, resetToSha, squashTaskCommits } from "../git-utils.ts";
@@ -65,12 +71,15 @@ import { runExecutePhase, runValidation } from "./execute.ts";
 import { runCrossTaskValidation, shouldRunValidation } from "../cross-task-validation.ts";
 import { captureBaseline } from "../test-baseline.ts";
 import { resolveFailureAction } from "../failure-taxonomy.ts";
+import { computeProgressSummary, formatProgressSummary } from "../progress.ts";
 import type { AgentProfile, DispatchResult, CostCheckResult } from "../../dispatch.ts";
 
 const mockRunCrossTaskValidation = vi.mocked(runCrossTaskValidation);
 const mockShouldRunValidation = vi.mocked(shouldRunValidation);
 const mockCaptureBaseline = vi.mocked(captureBaseline);
 const mockResolveFailureAction = vi.mocked(resolveFailureAction);
+const mockComputeProgressSummary = vi.mocked(computeProgressSummary);
+const mockFormatProgressSummary = vi.mocked(formatProgressSummary);
 
 const mockGetConfig = vi.mocked(getConfig);
 
@@ -153,6 +162,11 @@ function setupDefaultMocks() {
 	});
 	mockSquashTaskCommits.mockResolvedValue({ sha: "squashed123", success: true });
 	mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+	mockComputeProgressSummary.mockReturnValue({
+		tasksCompleted: 1, tasksRemaining: 0, tasksSkipped: 0,
+		cumulativeCost: 0.03, estimatedRemainingCost: 0, currentTaskTitle: "Task 1",
+	});
+	mockFormatProgressSummary.mockReturnValue("Progress: 1 done, 0 remaining | Cost: $0.03");
 	mockGetConfig.mockReturnValue({ validationCommand: "", testCommand: "", validationCadence: "every", validationInterval: 3 } as any);
 	mockShouldRunValidation.mockReturnValue(false);
 	mockResolveFailureAction.mockImplementation((type) => {
@@ -638,6 +652,33 @@ describe("runExecutePhase", () => {
 			expect(result.tasks[0].status).toBe("complete");
 			expect(result.tasks[0].commitSha).toBeUndefined();
 			expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("squash"), "warning");
+		});
+
+		it("displays progress summary after each task completion", async () => {
+			setupDefaultMocks();
+			const ctx = makeCtx();
+			const state = makeState();
+			const result = await runExecutePhase(state, ctx);
+
+			expect(mockComputeProgressSummary).toHaveBeenCalled();
+			expect(mockFormatProgressSummary).toHaveBeenCalled();
+			expect(ctx.ui.notify).toHaveBeenCalledWith(
+				expect.stringContaining("Progress"),
+				"info",
+			);
+		});
+
+		it("populates task.summary with title, status, and changedFiles", async () => {
+			setupDefaultMocks();
+			mockComputeChangedFiles.mockResolvedValue(["src/a.ts", "test/a.test.ts"]);
+
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[0].summary).toBeDefined();
+			expect(result.tasks[0].summary!.title).toBe("Task 1");
+			expect(result.tasks[0].summary!.status).toBe("complete");
+			expect(result.tasks[0].summary!.changedFiles).toContain("src/a.ts");
 		});
 	});
 
