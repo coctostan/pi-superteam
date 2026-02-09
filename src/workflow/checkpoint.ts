@@ -26,6 +26,7 @@ interface CheckpointState {
   currentTaskIndex: number;
   totalCostUsd: number;
   lastValidationFailed?: boolean;
+  lastBudgetCheckpointCostUsd?: number;
 }
 
 /**
@@ -46,18 +47,25 @@ export function evaluateCheckpointTriggers(
   if (!hasRemaining) return triggers;
 
   // Budget critical: cost >= 90% of hard limit (takes priority over warning)
+  // Only fire if not already acknowledged at this level
   const criticalThreshold = costs.hardLimitUsd * 0.9;
+  const lastBudget = state.lastBudgetCheckpointCostUsd;
+
   if (state.totalCostUsd >= criticalThreshold) {
-    triggers.push({
-      type: "budget-critical",
-      message: `Budget critical: $${state.totalCostUsd.toFixed(2)} spent (hard limit: $${costs.hardLimitUsd.toFixed(2)})`,
-    });
+    if (lastBudget === undefined || lastBudget < criticalThreshold) {
+      triggers.push({
+        type: "budget-critical",
+        message: `Budget critical: $${state.totalCostUsd.toFixed(2)} spent (hard limit: $${costs.hardLimitUsd.toFixed(2)})`,
+      });
+    }
   } else if (state.totalCostUsd >= costs.warnAtUsd) {
     // Budget warning: cost >= warnAtUsd (only if critical didn't fire)
-    triggers.push({
-      type: "budget-warning",
-      message: `Budget warning: $${state.totalCostUsd.toFixed(2)} spent (warn threshold: $${costs.warnAtUsd.toFixed(2)})`,
-    });
+    if (lastBudget === undefined || lastBudget < costs.warnAtUsd) {
+      triggers.push({
+        type: "budget-warning",
+        message: `Budget warning: $${state.totalCostUsd.toFixed(2)} spent (warn threshold: $${costs.warnAtUsd.toFixed(2)})`,
+      });
+    }
   }
 
   // Test failure: cross-task validation detected an issue

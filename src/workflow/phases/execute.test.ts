@@ -1575,6 +1575,48 @@ describe("runExecutePhase", () => {
 				{ warnAtUsd: 10, hardLimitUsd: 50 },
 			);
 		});
+
+		it("sets lastBudgetCheckpointCostUsd after presenting a budget checkpoint", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({
+				validationCommand: "",
+				testCommand: "",
+				validationCadence: "every",
+				validationInterval: 3,
+				costs: { warnAtUsd: 10, hardLimitUsd: 50 },
+			} as any);
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "budget-warning", message: "Budget warning: $12.00 spent" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("continue");
+
+			const state = makeState({
+				totalCostUsd: 12.0,
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			// Cost accumulates during dispatches, so it will be >= initial 12.0
+			expect(result.lastBudgetCheckpointCostUsd).toBeDefined();
+			expect(result.lastBudgetCheckpointCostUsd).toBeGreaterThanOrEqual(12.0);
+			expect(result.lastBudgetCheckpointCostUsd).toBe(result.totalCostUsd);
+		});
+
+		it("does not set lastBudgetCheckpointCostUsd for non-budget triggers", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "scheduled", message: "Scheduled checkpoint" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("continue");
+
+			const state = makeState({
+				totalCostUsd: 3.0,
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.lastBudgetCheckpointCostUsd).toBeUndefined();
+		});
 	});
 
 	// --- Reviewer write-guard ---

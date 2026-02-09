@@ -339,13 +339,14 @@ export async function runExecutePhase(
 		// h1c. CHECKPOINT EVALUATION
 		{
 			const checkConfig = getConfig(ctx.cwd);
-			const costs = (checkConfig as any).costs || { warnAtUsd: 25, hardLimitUsd: 75 };
+			const costs = checkConfig.costs;
 			const triggers = evaluateCheckpointTriggers(state, costs);
 
 			if (triggers.length > 0 && ui?.select) {
 				const completedCount = state.tasks.filter(t => t.status === "complete").length;
 				const skippedCount = state.tasks.filter(t => t.status === "skipped").length;
-				const remainingCount = state.tasks.length - completedCount - skippedCount;
+				const escalatedCount = state.tasks.filter(t => t.status === "escalated").length;
+				const remainingCount = state.tasks.length - completedCount - skippedCount - escalatedCount;
 				const avgCost = completedCount > 0 ? state.totalCostUsd / completedCount : 0;
 
 				const checkpointChoice = await presentCheckpoint(
@@ -358,6 +359,12 @@ export async function runExecutePhase(
 					},
 					ui,
 				);
+
+				// Track budget checkpoint acknowledgment to prevent fatigue
+				const hasBudgetTrigger = triggers.some(t => t.type === "budget-warning" || t.type === "budget-critical");
+				if (hasBudgetTrigger) {
+					state.lastBudgetCheckpointCostUsd = state.totalCostUsd;
+				}
 
 				if (checkpointChoice === "abort") {
 					state.error = "Aborted at checkpoint";

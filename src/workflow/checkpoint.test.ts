@@ -173,6 +173,80 @@ describe("evaluateCheckpointTriggers", () => {
     });
     expect(triggers).toEqual([]);
   });
+
+  it("suppresses budget-warning when already acknowledged at this level", () => {
+    const state = makeState({
+      totalCostUsd: 30.0,
+      lastBudgetCheckpointCostUsd: 26.0, // acknowledged when cost was $26
+      tasks: [
+        { id: 1, title: "A", status: "complete" },
+        { id: 2, title: "B", status: "pending" },
+      ],
+      currentTaskIndex: 1,
+    });
+    const triggers = evaluateCheckpointTriggers(state, {
+      warnAtUsd: 25,
+      hardLimitUsd: 75,
+    });
+    const types = triggers.map(t => t.type);
+    expect(types).not.toContain("budget-warning");
+  });
+
+  it("suppresses budget-critical when already acknowledged at this level", () => {
+    const state = makeState({
+      totalCostUsd: 70.0,
+      lastBudgetCheckpointCostUsd: 68.0, // acknowledged when cost was $68 (above 90% of $75)
+      tasks: [
+        { id: 1, title: "A", status: "complete" },
+        { id: 2, title: "B", status: "pending" },
+      ],
+      currentTaskIndex: 1,
+    });
+    const triggers = evaluateCheckpointTriggers(state, {
+      warnAtUsd: 25,
+      hardLimitUsd: 75,
+    });
+    const types = triggers.map(t => t.type);
+    expect(types).not.toContain("budget-critical");
+  });
+
+  it("fires budget-critical even after budget-warning was acknowledged", () => {
+    const state = makeState({
+      totalCostUsd: 68.0,
+      lastBudgetCheckpointCostUsd: 26.0, // acknowledged warning but not critical
+      tasks: [
+        { id: 1, title: "A", status: "complete" },
+        { id: 2, title: "B", status: "pending" },
+      ],
+      currentTaskIndex: 1,
+    });
+    const triggers = evaluateCheckpointTriggers(state, {
+      warnAtUsd: 25,
+      hardLimitUsd: 75,
+    });
+    expect(triggers).toContainEqual(
+      expect.objectContaining({ type: "budget-critical" }),
+    );
+  });
+
+  it("fires budget-warning when lastBudgetCheckpointCostUsd is undefined (first time)", () => {
+    const state = makeState({
+      totalCostUsd: 26.0,
+      // no lastBudgetCheckpointCostUsd — first time over threshold
+      tasks: [
+        { id: 1, title: "A", status: "complete" },
+        { id: 2, title: "B", status: "pending" },
+      ],
+      currentTaskIndex: 1,
+    });
+    const triggers = evaluateCheckpointTriggers(state, {
+      warnAtUsd: 25,
+      hardLimitUsd: 75,
+    });
+    expect(triggers).toContainEqual(
+      expect.objectContaining({ type: "budget-warning" }),
+    );
+  });
 });
 
 describe("formatCheckpointMessage", () => {

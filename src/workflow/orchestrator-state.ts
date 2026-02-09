@@ -107,6 +107,7 @@ export type OrchestratorState = {
   pendingInteraction?: PendingInteraction;
   error?: string;
   lastValidationFailed?: boolean;
+  lastBudgetCheckpointCostUsd?: number;
   testBaseline?: TestBaseline;
   gitStartingSha?: string;
   gitBranch?: string;
