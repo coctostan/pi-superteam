@@ -87,6 +87,7 @@ export function buildImplPrompt(
 	task: TaskExecState,
 	planContext: string,
 	previousTaskSummary?: { title: string; status: string; changedFiles: string[] },
+	priorTasks?: Array<{ title: string; status: string; changedFiles: string[] }>,
 ): string {
 	const parts = [
 		`## Task: ${task.title}`,
@@ -101,7 +102,19 @@ export function buildImplPrompt(
 		``,
 	];
 
-	if (previousTaskSummary) {
+	// New: array of prior tasks (capped at 5)
+	if (priorTasks && priorTasks.length > 0) {
+		const capped = priorTasks.slice(-5);
+		parts.push(`## Prior tasks`);
+		for (const pt of capped) {
+			parts.push(`**${pt.title}** — ${pt.status}`);
+			if (pt.changedFiles.length > 0) {
+				parts.push(`Changed: ${pt.changedFiles.join(", ")}`);
+			}
+		}
+		parts.push(``);
+	} else if (previousTaskSummary) {
+		// Legacy: single previous task
 		parts.push(
 			`## Previous task`,
 			`**${previousTaskSummary.title}** — ${previousTaskSummary.status}`,
