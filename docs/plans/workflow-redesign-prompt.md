@@ -49,7 +49,7 @@ Read these files to understand the current codebase before writing the plan:
 
 ## Plan Requirements
 
-1. **Use the writing-plans skill format.** Read `/home/pi/.npm-global/lib/node_modules/pi-superteam/skills/writing-plans/SKILL.md` for the format. Each task needs: title, files (create/modify/test), bite-sized TDD steps (write failing test → verify RED → implement → verify GREEN → commit).
+1. **Use the superteam-writing-plans skill format.** Read `/home/pi/.npm-global/lib/node_modules/pi-superteam/skills/superteam-writing-plans/SKILL.md` for the format. Each task needs: title, files (create/modify/test), bite-sized TDD steps (write failing test → verify RED → implement → verify GREEN → commit).
 
 2. **Tasks must be ordered by dependency.** Later tasks depend on earlier ones. Each task should be completable independently given its predecessors.
 

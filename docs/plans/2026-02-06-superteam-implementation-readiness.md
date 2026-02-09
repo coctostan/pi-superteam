@@ -19,7 +19,7 @@ This means the plan is specific enough to execute without major architectural de
 
 2. **Portable skill loading for isolated subagents**
    - Resolved by specifying `--skill` as a **file path** (not a skill name), e.g.:
-     - `--skill <packageDir>/skills/test-driven-development/SKILL.md`
+     - `--skill <packageDir>/skills/superteam-test-driven-development/SKILL.md`
 
 3. **User-initiated test runs (`!npm test`) tracking**
    - Resolved by documenting the actual constraint:

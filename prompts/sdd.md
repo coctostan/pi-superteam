@@ -5,5 +5,5 @@ Load the plan and run SDD orchestration. Use /sdd load to load the plan, then /s
 
 Plan file: $1
 
-If no plan file specified, create a plan first using the writing-plans skill, then load it.
+If no plan file specified, create a plan first using the superteam-writing-plans skill, then load it.
 $@

@@ -422,11 +422,11 @@ pi-superteam/
 │   └── architect.md
 │
 ├── skills/                           Methodology skills (5)
-│   ├── test-driven-development/
+│   ├── superteam-test-driven-development/
 │   ├── acceptance-test-driven-development/
-│   ├── subagent-driven-development/
-│   ├── writing-plans/
-│   └── brainstorming/
+│   ├── superteam-subagent-driven-development/
+│   ├── superteam-writing-plans/
+│   └── superteam-brainstorming/
 │
 ├── rules/                            Context rules (3)
 │   ├── test-first.md

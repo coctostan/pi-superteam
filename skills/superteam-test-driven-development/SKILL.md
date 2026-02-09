@@ -1,5 +1,5 @@
 ---
-name: test-driven-development
+name: superteam-test-driven-development
 description: Write failing tests before implementation code — RED, GREEN, REFACTOR
 globs: "**/*.ts,**/*.tsx,**/*.js,**/*.jsx"
 ---

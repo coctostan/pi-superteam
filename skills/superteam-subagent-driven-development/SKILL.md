@@ -1,5 +1,5 @@
 ---
-name: subagent-driven-development
+name: superteam-subagent-driven-development
 description: Break work into tasks, dispatch specialized agents, review iteratively
 globs: "**/*"
 ---

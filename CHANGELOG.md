@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0 (2026-02-09)
+
+### Breaking Changes
+
+- Renamed bundled skills to avoid name conflicts with `pi-superpowers`:
+  - `brainstorming` → `superteam-brainstorming`
+  - `writing-plans` → `superteam-writing-plans`
+  - `subagent-driven-development` → `superteam-subagent-driven-development`
+  - `test-driven-development` → `superteam-test-driven-development`
+- Updated implementer subprocess to load `skills/superteam-test-driven-development/SKILL.md`.
+
+### Migration
+
+- Update any references to the old skill folders/skill names to the new `superteam-*` names.
+
 ## 0.2.1 (2026-02-07)
 
 ### Bug Fixes

@@ -295,7 +295,7 @@ export function buildSubprocessArgs(agent: AgentProfile, cwd: string): string[] 
 	// Implementer gets: guard extension + TDD skill
 	if (agent.name === "implementer") {
 		const extensionPath = path.join(packageDir, "src", "index.ts");
-		const skillPath = path.join(packageDir, "skills", "test-driven-development", "SKILL.md");
+		const skillPath = path.join(packageDir, "skills", "superteam-test-driven-development", "SKILL.md");
 		if (fs.existsSync(extensionPath)) args.push("-e", extensionPath);
 		if (fs.existsSync(skillPath)) args.push("--skill", skillPath);
 	}

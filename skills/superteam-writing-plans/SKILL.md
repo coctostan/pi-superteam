@@ -1,5 +1,5 @@
 ---
-name: writing-plans
+name: superteam-writing-plans
 description: Create structured implementation plans with machine-parseable task blocks
 globs: "**/*.md"
 ---

@@ -69,7 +69,7 @@ src/
         └── finalize.ts       ← Finalize phase (cross-task review + report)
 
 agents/   ← Agent profiles (9 built-in, markdown with YAML frontmatter)
-skills/   ← Methodology skills (5: TDD, ATDD, SDD, writing-plans, brainstorming)
+skills/   ← Methodology skills (5: superteam-TDD, ATDD, superteam-SDD, superteam-writing-plans, superteam-brainstorming)
 rules/    ← Context rules (3: test-first, yagni, no-impl-before-spec)
 prompts/  ← Prompt templates (4: /sdd, /review-parallel, /scout, /implement)
 docs/     ← Guides and reference documentation
