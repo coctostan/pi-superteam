@@ -17,8 +17,9 @@ import {
 	buildBrainstormDesignPrompt,
 	buildBrainstormSectionRevisionPrompt,
 	buildTargetedPlanRevisionPrompt,
+	buildBrainstormConversationalPrompt,
 } from "./prompt-builder.ts";
-import type { TaskExecState, BrainstormQuestion, BrainstormApproach, DesignSection } from "./orchestrator-state.ts";
+import type { TaskExecState, BrainstormQuestion, BrainstormApproach, DesignSection, ConversationEntry } from "./orchestrator-state.ts";
 import type { ReviewFindings } from "../review-parser.ts";
 
 // --- Helpers ---
@@ -505,5 +506,81 @@ describe("buildTargetedPlanRevisionPrompt", () => {
 	it("instructs to keep the superteam-tasks block", () => {
 		const result = buildTargetedPlanRevisionPrompt("plan", "findings", "design");
 		expect(result).toContain("superteam-tasks");
+	});
+});
+
+describe("buildBrainstormConversationalPrompt", () => {
+	const baseState = {
+		scoutOutput: "TypeScript project, Express, Vitest",
+		userDescription: "Add user authentication",
+		step: "questions" as const,
+		conversationLog: [
+			{ role: "brainstormer" as const, step: "questions" as const, content: "Here are 3 questions about auth" },
+			{ role: "user" as const, step: "questions" as const, content: "Question 2 is irrelevant" },
+		],
+	};
+
+	it("includes scout output", () => {
+		const result = buildBrainstormConversationalPrompt(baseState, "Please revise");
+		expect(result).toContain("TypeScript project, Express, Vitest");
+	});
+
+	it("includes user description", () => {
+		const result = buildBrainstormConversationalPrompt(baseState, "Please revise");
+		expect(result).toContain("Add user authentication");
+	});
+
+	it("includes conversation history entries", () => {
+		const result = buildBrainstormConversationalPrompt(baseState, "Please revise");
+		expect(result).toContain("Here are 3 questions about auth");
+		expect(result).toContain("Question 2 is irrelevant");
+	});
+
+	it("includes the user's latest comment", () => {
+		const result = buildBrainstormConversationalPrompt(baseState, "Drop question 2 entirely");
+		expect(result).toContain("Drop question 2 entirely");
+	});
+
+	it("filters conversation log to current step", () => {
+		const mixedLog: ConversationEntry[] = [
+			{ role: "brainstormer", step: "triage", content: "triage stuff" },
+			{ role: "brainstormer", step: "questions", content: "questions stuff" },
+		];
+		const state = { ...baseState, conversationLog: mixedLog };
+		const result = buildBrainstormConversationalPrompt(state, "comment");
+		expect(result).toContain("questions stuff");
+		expect(result).not.toContain("triage stuff");
+	});
+
+	it("caps conversation history to ~3000 words", () => {
+		const longEntry = "word ".repeat(2000); // 2000 words per entry
+		const longLog: ConversationEntry[] = [
+			{ role: "brainstormer", step: "questions", content: longEntry },
+			{ role: "user", step: "questions", content: longEntry },
+		];
+		const state = { ...baseState, conversationLog: longLog };
+		const result = buildBrainstormConversationalPrompt(state, "short comment");
+		// Total conversation section should be capped — not contain both full entries
+		const conversationSection = result.split("## Conversation")[1] || "";
+		const wordCount = conversationSection.split(/\s+/).length;
+		expect(wordCount).toBeLessThan(3500); // some slack for headers
+	});
+
+	it("handles empty conversation log", () => {
+		const state = { ...baseState, conversationLog: [] };
+		const result = buildBrainstormConversationalPrompt(state, "comment");
+		expect(result).toContain("comment");
+		expect(result).toContain("Add user authentication");
+	});
+
+	it("handles undefined conversation log", () => {
+		const state = { ...baseState, conversationLog: undefined };
+		const result = buildBrainstormConversationalPrompt(state, "comment");
+		expect(result).toContain("comment");
+	});
+
+	it("includes literal newline warning", () => {
+		const result = buildBrainstormConversationalPrompt(baseState, "comment");
+		expect(result.toLowerCase()).toContain("never use literal newlines inside string values");
 	});
 });
