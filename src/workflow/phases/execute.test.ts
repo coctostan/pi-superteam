@@ -1418,6 +1418,38 @@ describe("runExecutePhase", () => {
 		});
 	});
 
+	// --- Full D1-D8 integration ---
+
+	describe("full D1-D8 integration", () => {
+		it("complete task flow: impl → parallel review → squash → summary → advance", async () => {
+			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+			mockSquashTaskCommits.mockResolvedValue({ sha: "squashed-sha", success: true });
+			mockComputeProgressSummary.mockReturnValue({
+				tasksCompleted: 1, tasksRemaining: 0, tasksSkipped: 0,
+				cumulativeCost: 0.05, estimatedRemainingCost: 0, currentTaskTitle: "Task 1",
+			});
+			mockFormatProgressSummary.mockReturnValue("Progress: 1 done");
+
+			const state = makeState({
+				tasks: [makeTask({ id: 1, title: "Task 1", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			// Verify complete flow
+			expect(result.tasks[0].status).toBe("complete");
+			expect(result.tasks[0].commitSha).toBe("squashed-sha");
+			expect(result.tasks[0].summary).toBeDefined();
+			expect(mockDispatchParallel).toHaveBeenCalled(); // parallel reviews
+			expect(mockSquashTaskCommits).toHaveBeenCalled(); // squash
+			expect(mockComputeProgressSummary).toHaveBeenCalled(); // progress
+			expect(result.phase).toBe("finalize");
+		});
+	});
+
 	// --- Reviewer write-guard ---
 
 	describe("reviewer write-guard", () => {
