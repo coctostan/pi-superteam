@@ -163,4 +163,69 @@ describe("extractFencedBlock (via parseBrainstormOutput)", () => {
     const result = parseBrainstormOutput(raw);
     expect(result.status).toBe("ok");
   });
+
+  it("parses triage response", () => {
+    const raw = `\`\`\`superteam-brainstorm\n${JSON.stringify({
+      type: "triage",
+      level: "straightforward",
+      reasoning: "This is a focused change to one file.",
+      suggestedSkips: ["questions", "approaches"],
+    })}\n\`\`\``;
+    const result = parseBrainstormOutput(raw);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.data.type).toBe("triage");
+      expect((result.data as any).level).toBe("straightforward");
+      expect((result.data as any).reasoning).toBeTruthy();
+      expect((result.data as any).suggestedSkips).toEqual(["questions", "approaches"]);
+    }
+  });
+
+  it("parses triage response with batches for chunking", () => {
+    const raw = `\`\`\`superteam-brainstorm\n${JSON.stringify({
+      type: "triage",
+      level: "complex",
+      reasoning: "Broad change touching multiple systems.",
+      batches: [
+        { title: "Infrastructure", description: "Set up base types and validation" },
+        { title: "Wiring", description: "Connect to orchestrator" },
+      ],
+    })}\n\`\`\``;
+    const result = parseBrainstormOutput(raw);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.data.type).toBe("triage");
+      expect((result.data as any).batches).toHaveLength(2);
+    }
+  });
+
+  it("parses triage response with splits for independent workflows", () => {
+    const raw = `\`\`\`superteam-brainstorm\n${JSON.stringify({
+      type: "triage",
+      level: "exploration",
+      reasoning: "Two independent concerns.",
+      splits: [
+        { title: "API endpoint", description: "New REST endpoint" },
+        { title: "CLI refactor", description: "Refactor CLI help" },
+      ],
+    })}\n\`\`\``;
+    const result = parseBrainstormOutput(raw);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.data.type).toBe("triage");
+      expect((result.data as any).splits).toHaveLength(2);
+    }
+  });
+
+  it("triage with missing level defaults gracefully", () => {
+    const raw = `\`\`\`superteam-brainstorm\n${JSON.stringify({
+      type: "triage",
+      reasoning: "No level specified.",
+    })}\n\`\`\``;
+    const result = parseBrainstormOutput(raw);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect((result.data as any).level).toBe("exploration"); // default
+    }
+  });
 });
