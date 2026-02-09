@@ -1,14 +1,16 @@
 import type { OrchestratorState, TaskExecState } from "../orchestrator-state.js";
 import { saveState } from "../orchestrator-state.js";
 import { buildImplPrompt, buildFixPrompt, buildSpecReviewPrompt, buildQualityReviewPrompt, extractPlanContext } from "../prompt-builder.js";
-import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.js";
+import { getCurrentSha, computeChangedFiles, resetToSha, squashTaskCommits } from "../git-utils.js";
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, hasWriteToolCalls, type AgentProfile, type OnStreamEvent } from "../../dispatch.js";
 import { parseReviewOutput, formatFindings, hasCriticalFindings, type ReviewFindings, type ParseResult } from "../../review-parser.js";
 import { formatToolAction, formatTaskProgress, createActivityBuffer } from "../ui.js";
+import { computeProgressSummary, formatProgressSummary } from "../progress.js";
 import { getConfig } from "../../config.js";
 import { runCrossTaskValidation, shouldRunValidation } from "../cross-task-validation.js";
 import { captureBaseline } from "../test-baseline.js";
 import { resolveFailureAction } from "../failure-taxonomy.js";
+import { evaluateCheckpointTriggers, presentCheckpoint, presentPlanRevision, applyPlanAdjustment } from "../checkpoint.js";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -140,7 +142,8 @@ export async function runExecutePhase(
 				saveState(state, ctx.cwd);
 				continue;
 			}
-			// retry — continue loop to try again
+			// retry — decrement so for-loop re-runs this index
+			i--;
 			continue;
 		}
 
@@ -148,8 +151,13 @@ export async function runExecutePhase(
 		task.status = "implementing";
 		saveState(state, ctx.cwd);
 
+		// Collect prior task summaries for context forwarding (D6)
+		const priorTasks = state.tasks
+			.filter(t => t.status === "complete" && t.summary)
+			.map(t => t.summary!);
+
 		const implResult = await dispatchAgent(
-			implementer, buildImplPrompt(task, planContext), ctx.cwd, signal, undefined, makeOnStreamEvent(),
+			implementer, buildImplPrompt(task, planContext, undefined, priorTasks), ctx.cwd, signal, undefined, makeOnStreamEvent(),
 		);
 		state.totalCostUsd += implResult.usage.cost;
 
@@ -166,8 +174,9 @@ export async function runExecutePhase(
 				saveState(state, ctx.cwd);
 				continue;
 			}
-			// retry
+			// retry — decrement so for-loop re-runs this index
 			task.status = "pending";
+			i--;
 			continue;
 		}
 
@@ -211,6 +220,7 @@ export async function runExecutePhase(
 									continue;
 								}
 								task.status = "pending";
+								i--;
 								continue;
 							}
 						}
@@ -235,6 +245,7 @@ export async function runExecutePhase(
 							}
 						}
 						task.status = "pending";
+						i--;
 						continue;
 					}
 				}
@@ -244,20 +255,14 @@ export async function runExecutePhase(
 		// d. CHANGED FILES
 		let changedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
 
-		// e. SPEC REVIEW
-		const specResult = await runReviewLoop(
-			state, task, "spec", specReviewer, implementer, changedFiles, maxRetries, ctx, signal, ui, makeOnStreamEvent,
-			(t, cf) => buildSpecReviewPrompt(t, cf),
-		);
-		if (specResult === "escalated") return state;
-		changedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
-
-		// f. QUALITY REVIEW
-		const qualResult = await runReviewLoop(
-			state, task, "quality", qualityReviewer, implementer, changedFiles, maxRetries, ctx, signal, ui, makeOnStreamEvent,
-			(t, cf) => buildQualityReviewPrompt(t, cf),
-		);
-		if (qualResult === "escalated") return state;
+		// e+f. PARALLEL SPEC + QUALITY REVIEW
+		{
+			const reviewResult = await runParallelReviewLoop(
+				state, task, specReviewer, qualityReviewer, implementer,
+				changedFiles, maxRetries, ctx, signal, ui, makeOnStreamEvent,
+			);
+			if (reviewResult === "escalated") return state;
+		}
 
 		// g. OPTIONAL REVIEWS
 		if (optionalReviewers.length > 0) {
@@ -301,11 +306,84 @@ export async function runExecutePhase(
 
 		// h. COMPLETE
 		task.status = "complete";
+
+		// h1. SQUASH COMMITS
+		if (task.gitShaBeforeImpl) {
+			const squashResult = await squashTaskCommits(ctx.cwd, task.gitShaBeforeImpl, task.id, task.title);
+			if (squashResult.success) {
+				task.commitSha = squashResult.sha;
+			} else {
+				ui?.notify?.(`Warning: commit squash failed for task ${task.id}: ${squashResult.error}`, "warning");
+			}
+		}
+
 		state.currentTaskIndex = i + 1;
 		saveState(state, ctx.cwd);
 
+		// h1b. PROGRESS SUMMARY
+		{
+			const taskChangedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
+			task.summary = {
+				title: task.title,
+				status: task.status,
+				changedFiles: taskChangedFiles,
+			};
+			const summary = computeProgressSummary(state);
+			const formatted = formatProgressSummary(summary);
+			ui?.notify?.(formatted, "info");
+		}
+
 		// Update progress widget
 		ui?.setWidget?.("workflow-progress", formatTaskProgress(state.tasks, i + 1));
+
+		// h1c. CHECKPOINT EVALUATION
+		{
+			const checkConfig = getConfig(ctx.cwd);
+			const costs = checkConfig.costs;
+			const triggers = evaluateCheckpointTriggers(state, costs);
+
+			if (triggers.length > 0 && ui?.select) {
+				const completedCount = state.tasks.filter(t => t.status === "complete").length;
+				const skippedCount = state.tasks.filter(t => t.status === "skipped").length;
+				const escalatedCount = state.tasks.filter(t => t.status === "escalated").length;
+				const remainingCount = state.tasks.length - completedCount - skippedCount - escalatedCount;
+				const avgCost = completedCount > 0 ? state.totalCostUsd / completedCount : 0;
+
+				const checkpointChoice = await presentCheckpoint(
+					triggers,
+					{
+						tasksCompleted: completedCount,
+						tasksTotal: state.tasks.length,
+						costUsd: state.totalCostUsd,
+						estimatedRemainingUsd: avgCost * remainingCount,
+					},
+					ui,
+				);
+
+				// Track budget checkpoint acknowledgment to prevent fatigue
+				const hasBudgetTrigger = triggers.some(t => t.type === "budget-warning" || t.type === "budget-critical");
+				if (hasBudgetTrigger) {
+					state.lastBudgetCheckpointCostUsd = state.totalCostUsd;
+				}
+
+				if (checkpointChoice === "abort") {
+					state.error = "Aborted at checkpoint";
+					saveState(state, ctx.cwd);
+					return state;
+				}
+
+				if (checkpointChoice === "adjust") {
+					const adjustment = await presentPlanRevision(state.tasks, ui);
+					if (adjustment) {
+						state.tasks = applyPlanAdjustment(state.tasks, adjustment) as TaskExecState[];
+						saveState(state, ctx.cwd);
+					}
+				}
+			}
+		}
+
+		// Clear validation failure flag after checkpoint has had a chance to use it
+		state.lastValidationFailed = false;
 
 		// h2. CROSS-TASK VALIDATION
 		{
@@ -329,6 +407,7 @@ export async function runExecutePhase(
 
 					// Classify regressions via taxonomy
 					if (!valResult.passed) {
+						state.lastValidationFailed = true;
 						const regressionAction = resolveFailureAction("test-regression");
 						const failNames = valResult.blockingFailures.map(f => f.name).join(", ");
 
@@ -383,6 +462,127 @@ export async function runExecutePhase(
 	return state;
 }
 
+// --- Parallel review loop (D4) ---
+
+async function runParallelReviewLoop(
+	state: OrchestratorState,
+	task: TaskExecState,
+	specReviewer: AgentProfile | undefined,
+	qualityReviewer: AgentProfile | undefined,
+	implementer: AgentProfile,
+	changedFiles: string[],
+	maxRetries: number,
+	ctx: { cwd: string },
+	signal: AbortSignal | undefined,
+	ui: any,
+	makeOnStreamEvent: () => OnStreamEvent,
+): Promise<"passed" | "escalated"> {
+	// Build list of available reviewers
+	const reviewers: AgentProfile[] = [];
+	const reviewNames: string[] = [];
+	if (specReviewer) { reviewers.push(specReviewer); reviewNames.push("spec"); }
+	if (qualityReviewer) { reviewers.push(qualityReviewer); reviewNames.push("quality"); }
+
+	if (reviewers.length === 0) {
+		task.reviewsPassed.push("spec", "quality");
+		return "passed";
+	}
+
+	task.status = "reviewing";
+	saveState(state, ctx.cwd);
+
+	let currentChangedFiles = changedFiles;
+
+	for (let attempt = 0; attempt < maxRetries; attempt++) {
+		// Build prompts for each reviewer
+		const prompts = reviewers.map((_, i) => {
+			if (reviewNames[i] === "spec") return buildSpecReviewPrompt(task, currentChangedFiles);
+			return buildQualityReviewPrompt(task, currentChangedFiles);
+		});
+
+		// Dispatch in parallel
+		const results = await dispatchParallel(reviewers, prompts, ctx.cwd, signal);
+		for (const r of results) {
+			state.totalCostUsd += r.usage.cost;
+		}
+
+		// Write-guard check on parallel results
+		for (let j = 0; j < results.length; j++) {
+			if (hasWriteToolCalls(results[j].messages)) {
+				ui?.notify?.(`Reviewer ${reviewNames[j]} attempted write operations — results may be tainted`, "warning");
+			}
+		}
+
+		// Parse results
+		const parsed: ParseResult[] = results.map(r => {
+			const output = getFinalOutput(r.messages);
+			return parseReviewOutput(output);
+		});
+
+		// Check if all passed
+		const allPassed = parsed.every(p => p.status === "pass");
+		if (allPassed) {
+			for (const name of reviewNames) {
+				if (!task.reviewsPassed.includes(name)) task.reviewsPassed.push(name);
+			}
+			return "passed";
+		}
+
+		// Check for inconclusive
+		const inconclusiveIdx = parsed.findIndex(p => p.status === "inconclusive");
+		if (inconclusiveIdx >= 0) {
+			const p = parsed[inconclusiveIdx] as { status: "inconclusive"; parseError: string };
+			const escalation = await escalate(task, `${reviewNames[inconclusiveIdx]} review inconclusive: ${p.parseError}`, ui, ctx.cwd);
+			if (escalation === "abort") { state.error = "Aborted by user"; saveState(state, ctx.cwd); return "escalated"; }
+			if (escalation === "skip") { task.status = "skipped"; saveState(state, ctx.cwd); return "escalated"; }
+			continue;
+		}
+
+		// At least one failed — fix and retry
+		if (attempt < maxRetries - 1) {
+			task.status = "fixing";
+			task.fixAttempts++;
+			saveState(state, ctx.cwd);
+
+			// Merge findings from ALL failed reviews into a single fix prompt
+			const allFindings: string[] = [];
+			for (let j = 0; j < parsed.length; j++) {
+				if (parsed[j].status === "fail") {
+					const failParsed = parsed[j] as { status: "fail"; findings: ReviewFindings };
+					allFindings.push(formatFindings(failParsed.findings, reviewNames[j]));
+				}
+			}
+			const mergedFixPrompt = [
+				`Fix these review findings for task "${task.title}".`,
+				``,
+				allFindings.join("\n\n"),
+				``,
+				`## Changed files`,
+				currentChangedFiles.map((f) => `- ${f}`).join("\n"),
+				``,
+				`Update tests if needed. Use TDD — fix failing tests first if any.`,
+			].join("\n");
+
+			const fixResult = await dispatchAgent(
+				implementer,
+				mergedFixPrompt,
+				ctx.cwd, signal, undefined, makeOnStreamEvent(),
+			);
+			state.totalCostUsd += fixResult.usage.cost;
+
+			currentChangedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
+			task.status = "reviewing";
+			saveState(state, ctx.cwd);
+		} else {
+			const escalation = await escalate(task, `Reviews failed after ${maxRetries} attempts`, ui, ctx.cwd);
+			if (escalation === "abort") { state.error = "Aborted by user"; saveState(state, ctx.cwd); return "escalated"; }
+			if (escalation === "skip") { task.status = "skipped"; saveState(state, ctx.cwd); return "escalated"; }
+		}
+	}
+
+	return "passed";
+}
+
 // --- Escalation via ctx.ui.select ---
 
 async function escalate(
@@ -405,110 +605,20 @@ async function escalate(
 	if (choice === "Skip") return "skip";
 	if (choice === "Rollback") {
 		if (task.gitShaBeforeImpl) {
+			const files = await computeChangedFiles(cwd, task.gitShaBeforeImpl);
+			ui?.notify?.(
+				`Rolling back task "${task.title}": reverting ${files.length} files to ${task.gitShaBeforeImpl.slice(0, 7)}`,
+				"info",
+			);
 			await resetToSha(cwd, task.gitShaBeforeImpl);
+			// Reset task state for clean retry
+			task.reviewsPassed = [];
+			task.reviewsFailed = [];
+			task.fixAttempts = 0;
 		}
 		return "retry";
 	}
 	return "retry";
 }
 
-// --- Review loop helper ---
 
-async function runReviewLoop(
-	state: OrchestratorState,
-	task: TaskExecState,
-	reviewType: string,
-	reviewer: AgentProfile | undefined,
-	implementer: AgentProfile,
-	changedFiles: string[],
-	maxRetries: number,
-	ctx: { cwd: string },
-	signal: AbortSignal | undefined,
-	ui: any,
-	makeOnStreamEvent: () => OnStreamEvent,
-	buildPrompt: (task: TaskExecState, changedFiles: string[]) => string,
-): Promise<"passed" | "escalated"> {
-	if (!reviewer) {
-		task.reviewsPassed.push(reviewType);
-		return "passed";
-	}
-
-	task.status = "reviewing";
-	saveState(state, ctx.cwd);
-
-	let currentChangedFiles = changedFiles;
-
-	for (let attempt = 0; attempt < maxRetries; attempt++) {
-		let reviewResult = await dispatchAgent(
-			reviewer, buildPrompt(task, currentChangedFiles), ctx.cwd, signal, undefined, makeOnStreamEvent(),
-		);
-		state.totalCostUsd += reviewResult.usage.cost;
-
-		// Write-guard: if reviewer wrote files, warn and re-dispatch once
-		if (hasWriteToolCalls(reviewResult.messages)) {
-			ui?.notify?.(`Reviewer ${reviewType} attempted write operations — re-dispatching`, "warning");
-			reviewResult = await dispatchAgent(
-				reviewer, buildPrompt(task, currentChangedFiles), ctx.cwd, signal, undefined, makeOnStreamEvent(),
-			);
-			state.totalCostUsd += reviewResult.usage.cost;
-			if (hasWriteToolCalls(reviewResult.messages)) {
-				ui?.notify?.(`Reviewer ${reviewType} wrote files on retry — escalating`, "warning");
-			}
-		}
-
-		const output = getFinalOutput(reviewResult.messages);
-		const parsed = parseReviewOutput(output);
-
-		if (parsed.status === "pass") {
-			task.reviewsPassed.push(reviewType);
-			return "passed";
-		}
-
-		if (parsed.status === "inconclusive") {
-			const escalation = await escalate(task, `${reviewType} review was inconclusive: ${parsed.parseError}`, ui, ctx.cwd);
-			if (escalation === "abort") {
-				state.error = "Aborted by user";
-				saveState(state, ctx.cwd);
-				return "escalated";
-			}
-			if (escalation === "skip") {
-				task.status = "skipped";
-				saveState(state, ctx.cwd);
-				return "escalated";
-			}
-			continue;
-		}
-
-		// status === "fail"
-		if (attempt < maxRetries - 1) {
-			task.status = "fixing";
-			task.fixAttempts++;
-			saveState(state, ctx.cwd);
-
-			const fixResult = await dispatchAgent(
-				implementer,
-				buildFixPrompt(task, reviewType, parsed.findings, currentChangedFiles),
-				ctx.cwd, signal, undefined, makeOnStreamEvent(),
-			);
-			state.totalCostUsd += fixResult.usage.cost;
-
-			currentChangedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
-			task.status = "reviewing";
-			saveState(state, ctx.cwd);
-		} else {
-			const escalation = await escalate(task, `${reviewType} review failed after ${maxRetries} attempts`, ui, ctx.cwd);
-			if (escalation === "abort") {
-				state.error = "Aborted by user";
-				saveState(state, ctx.cwd);
-				return "escalated";
-			}
-			if (escalation === "skip") {
-				task.status = "skipped";
-				saveState(state, ctx.cwd);
-				return "escalated";
-			}
-		}
-	}
-
-	return "passed";
-}

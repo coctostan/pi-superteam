@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getTrackedFiles, computeChangedFiles, getCurrentSha, resetToSha, squashCommitsSince } from "./git-utils.ts";
+import { getTrackedFiles, computeChangedFiles, getCurrentSha, resetToSha, squashCommitsSince, squashTaskCommits } from "./git-utils.ts";
 
 import * as path from "node:path";
 import * as os from "node:os";
@@ -183,5 +183,71 @@ describe("squashCommitsSince", () => {
 		const dir = makeTempDir();
 		const result = await squashCommitsSince(dir, "abc123", "msg");
 		expect(result).toBe(false);
+	});
+});
+
+describe("squashTaskCommits", () => {
+	it("stages unstaged changes, squashes commits, returns new SHA", async () => {
+		const dir = await makeTempRepo();
+		const baseSha = await getCurrentSha(dir);
+
+		// Make two commits (simulating implementer TDD cycles)
+		fs.writeFileSync(path.join(dir, "src.ts"), "impl");
+		await run("git", ["add", "."], { cwd: dir });
+		await run("git", ["commit", "-m", "wip: red"], { cwd: dir });
+
+		fs.writeFileSync(path.join(dir, "test.ts"), "test");
+		await run("git", ["add", "."], { cwd: dir });
+		await run("git", ["commit", "-m", "wip: green"], { cwd: dir });
+
+		const result = await squashTaskCommits(dir, baseSha, 1, "Add widget");
+		expect(result.success).toBe(true);
+		expect(result.sha).toMatch(/^[0-9a-f]{40}$/);
+
+		// Verify single squashed commit on top of initial
+		const { stdout } = await run("git", ["log", "--oneline"], { cwd: dir });
+		const lines = stdout.trim().split("\n");
+		expect(lines).toHaveLength(2); // initial + squashed
+		expect(lines[0]).toContain("workflow: task 1");
+		expect(lines[0]).toContain("Add widget");
+
+		// Files still exist
+		expect(fs.existsSync(path.join(dir, "src.ts"))).toBe(true);
+		expect(fs.existsSync(path.join(dir, "test.ts"))).toBe(true);
+	});
+
+	it("handles unstaged changes by committing them before squash", async () => {
+		const dir = await makeTempRepo();
+		const baseSha = await getCurrentSha(dir);
+
+		fs.writeFileSync(path.join(dir, "a.ts"), "committed");
+		await run("git", ["add", "."], { cwd: dir });
+		await run("git", ["commit", "-m", "wip"], { cwd: dir });
+
+		// Leave an unstaged file
+		fs.writeFileSync(path.join(dir, "b.ts"), "unstaged");
+
+		const result = await squashTaskCommits(dir, baseSha, 2, "Another task");
+		expect(result.success).toBe(true);
+
+		// Both files present after squash
+		expect(fs.existsSync(path.join(dir, "a.ts"))).toBe(true);
+		expect(fs.existsSync(path.join(dir, "b.ts"))).toBe(true);
+	});
+
+	it("returns success with current SHA when no changes since baseSha", async () => {
+		const dir = await makeTempRepo();
+		const sha = await getCurrentSha(dir);
+
+		const result = await squashTaskCommits(dir, sha, 3, "No changes");
+		expect(result.success).toBe(true);
+		expect(result.sha).toBe(sha);
+	});
+
+	it("returns error for non-repo directory", async () => {
+		const dir = makeTempDir();
+		const result = await squashTaskCommits(dir, "abc", 1, "Test");
+		expect(result.success).toBe(false);
+		expect(result.error).toBeDefined();
 	});
 });

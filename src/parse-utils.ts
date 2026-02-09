@@ -140,6 +140,20 @@ export function sanitizeJsonNewlines(jsonStr: string): string {
 	return result;
 }
 
+/**
+ * Strip ANSI escape sequences (colors, cursor, etc.) from text.
+ * Handles CSI sequences (\x1b[...X), OSC sequences (\x1b]...\x07), and simple escapes.
+ */
+export function stripAnsi(text: string): string {
+	// CSI sequences: \x1b[ followed by params and a final letter
+	// OSC sequences: \x1b] ... \x07 (or \x1b\\)
+	// Simple: \x1b followed by a single character
+	return text.replace(
+		/\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?(?:\x07|\x1b\\)|\x1b[^[\]]/g,
+		"",
+	);
+}
+
 function escapeRegExp(str: string): string {
 	return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -63,13 +63,13 @@ That means the SDD path can write implementation without any hard block. Reviews
 If you keep the current approach, reword “hard enforcement” claims to “hard enforcement in main session only; SDD relies on review verification.”
 
 ### H2) Skill loading is specified in a non-portable way
-The plan uses `--skill test-driven-development`.
+The plan uses `--skill <packageRoot>/skills/superteam-test-driven-development/SKILL.md`. 
 
 In pi, `--skill` takes a **path to a skill file or directory** (same pattern as extensions). In an isolated subprocess using `--no-skills`, you should pass an explicit path (likely within your installed package).
 
 **Fix in plan:**
 - dispatch computes `packageRoot`, then passes:
-  - `--skill ${packageRoot}/skills/test-driven-development/SKILL.md`
+  - `--skill ${packageRoot}/skills/superteam-test-driven-development/SKILL.md`
 
 Also explicitly verify whether “no-skills disables discovery but still loads explicitly-provided `--skill` paths” (likely yes, but call it out).
 

@@ -62,6 +62,12 @@ describe("orchestrator-state", () => {
       expect(state.planContent).toBeUndefined();
       expect(state.error).toBeUndefined();
     });
+
+    it("does not set gitStartingSha or gitBranch", () => {
+      const state = createInitialState("test");
+      expect(state.gitStartingSha).toBeUndefined();
+      expect(state.gitBranch).toBeUndefined();
+    });
   });
 
   describe("saveState and loadState", () => {

@@ -78,6 +78,7 @@ export type TaskExecState = {
   fixAttempts: number;
   gitShaBeforeImpl?: string;
   summary?: { title: string; status: string; changedFiles: string[] };
+  commitSha?: string;
 };
 
 export type PendingInteraction = {
@@ -105,7 +106,11 @@ export type OrchestratorState = {
   /** @deprecated Kept for backward compatibility. Use ctx.ui.* instead. */
   pendingInteraction?: PendingInteraction;
   error?: string;
+  lastValidationFailed?: boolean;
+  lastBudgetCheckpointCostUsd?: number;
   testBaseline?: TestBaseline;
+  gitStartingSha?: string;
+  gitBranch?: string;
 };
 
 export function createInitialState(description: string): OrchestratorState {

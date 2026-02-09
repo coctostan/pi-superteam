@@ -1,5 +1,5 @@
 ---
-name: brainstorming
+name: superteam-brainstorming
 description: Explore design options before committing to an approach
 globs: "**/*"
 ---
@@ -38,7 +38,7 @@ Before starting implementation, when:
 
 ### 4. Transition to Planning
 - Once the approach is decided, write a plan
-- Break into tasks using the writing-plans skill
+- Break into tasks using the superteam-writing-plans skill
 - Include a `superteam-tasks` block for automation
 
 ## Anti-Patterns

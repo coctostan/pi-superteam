@@ -14,6 +14,7 @@ import {
 import { formatInteractionForAgent, parseUserResponse } from "./interaction.js";
 import { formatStatus } from "./ui.js";
 import { writeProgressFile } from "./progress.js";
+import { runGitPreflight } from "./git-preflight.js";
 import { runBrainstormPhase } from "./phases/brainstorm.js";
 import { runPlanWritePhase } from "./phases/plan-write.js";
 import { runPlanReviewPhase } from "./phases/plan-review.js";
@@ -31,6 +32,65 @@ export async function runWorkflowLoop(
 	signal?: AbortSignal,
 ): Promise<OrchestratorState> {
 	const ui = (ctx as any).ui;
+
+	// Git preflight — only on first run (not resume)
+	if (!state.gitStartingSha) {
+		try {
+			const preflight = await runGitPreflight(ctx.cwd);
+
+			// Dirty repo check
+			if (!preflight.clean && ui?.select) {
+				const dirtyChoice = await ui.select(
+					`Working tree has uncommitted changes: ${preflight.uncommittedFiles.join(", ")}`,
+					["Stash changes", "Continue anyway", "Abort"],
+				);
+				if (dirtyChoice === "Abort") {
+					state.phase = "done";
+					state.error = "Aborted: dirty working tree";
+					saveState(state, ctx.cwd);
+					return state;
+				}
+				if (dirtyChoice === "Stash changes") {
+					const { execFile: execFileCb } = await import("node:child_process");
+					const { promisify } = await import("node:util");
+					const exec = promisify(execFileCb);
+					await exec("git", ["stash", "push", "-m", "superteam-workflow-preflight"], { cwd: ctx.cwd });
+				}
+			}
+
+			// Main branch check
+			if (preflight.isMainBranch && ui?.select) {
+				const branchChoice = await ui.select(
+					`On ${preflight.branch} branch. Create a workflow branch?`,
+					["Create workflow branch", "Continue on main", "Abort"],
+				);
+				if (branchChoice === "Abort") {
+					state.phase = "done";
+					state.error = "Aborted: on main branch";
+					saveState(state, ctx.cwd);
+					return state;
+				}
+				if (branchChoice === "Create workflow branch") {
+					const slug = state.userDescription
+						.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+					const branchName = `workflow/${slug}`;
+					const { execFile: execFileCb } = await import("node:child_process");
+					const { promisify } = await import("node:util");
+					const exec = promisify(execFileCb);
+					await exec("git", ["checkout", "-b", branchName], { cwd: ctx.cwd });
+					state.gitBranch = branchName;
+					ui?.notify?.(`Created branch: ${branchName}`, "info");
+				}
+			}
+
+			state.gitStartingSha = preflight.sha;
+			if (!state.gitBranch) state.gitBranch = preflight.branch;
+			saveState(state, ctx.cwd);
+		} catch (err: any) {
+			// Non-fatal — not a git repo or git not available
+			ui?.notify?.(`Git preflight skipped: ${err.message}`, "info");
+		}
+	}
 
 	while (state.phase !== "done") {
 		ui?.setStatus?.("workflow", formatStatus(state));

@@ -20,6 +20,7 @@ vi.mock("../git-utils.js", () => ({
 	getCurrentSha: vi.fn(),
 	computeChangedFiles: vi.fn(),
 	resetToSha: vi.fn(),
+	squashTaskCommits: vi.fn(),
 }));
 
 vi.mock("../../review-parser.js", async (importOriginal) => {
@@ -55,21 +56,43 @@ vi.mock("../test-baseline.js", () => ({
 	captureBaseline: vi.fn(),
 }));
 
+vi.mock("../progress.js", () => ({
+	writeProgressFile: vi.fn(),
+	computeProgressSummary: vi.fn(),
+	formatProgressSummary: vi.fn(),
+}));
+
+vi.mock("../checkpoint.js", () => ({
+	evaluateCheckpointTriggers: vi.fn(),
+	presentCheckpoint: vi.fn(),
+	presentPlanRevision: vi.fn(),
+	applyPlanAdjustment: vi.fn(),
+}));
+
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, hasWriteToolCalls } from "../../dispatch.ts";
 import { saveState } from "../orchestrator-state.ts";
-import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.ts";
+import { getCurrentSha, computeChangedFiles, resetToSha, squashTaskCommits } from "../git-utils.ts";
 import { parseReviewOutput, hasCriticalFindings } from "../../review-parser.ts";
 import { getConfig } from "../../config.ts";
 import { runExecutePhase, runValidation } from "./execute.ts";
 import { runCrossTaskValidation, shouldRunValidation } from "../cross-task-validation.ts";
 import { captureBaseline } from "../test-baseline.ts";
 import { resolveFailureAction } from "../failure-taxonomy.ts";
+import { computeProgressSummary, formatProgressSummary } from "../progress.ts";
+import { evaluateCheckpointTriggers, presentCheckpoint, presentPlanRevision, applyPlanAdjustment } from "../checkpoint.ts";
 import type { AgentProfile, DispatchResult, CostCheckResult } from "../../dispatch.ts";
+
+const mockEvaluateCheckpointTriggers = vi.mocked(evaluateCheckpointTriggers);
+const mockPresentCheckpoint = vi.mocked(presentCheckpoint);
+const mockPresentPlanRevision = vi.mocked(presentPlanRevision);
+const mockApplyPlanAdjustment = vi.mocked(applyPlanAdjustment);
 
 const mockRunCrossTaskValidation = vi.mocked(runCrossTaskValidation);
 const mockShouldRunValidation = vi.mocked(shouldRunValidation);
 const mockCaptureBaseline = vi.mocked(captureBaseline);
 const mockResolveFailureAction = vi.mocked(resolveFailureAction);
+const mockComputeProgressSummary = vi.mocked(computeProgressSummary);
+const mockFormatProgressSummary = vi.mocked(formatProgressSummary);
 
 const mockGetConfig = vi.mocked(getConfig);
 
@@ -82,6 +105,7 @@ const mockSaveState = vi.mocked(saveState);
 const mockGetCurrentSha = vi.mocked(getCurrentSha);
 const mockComputeChangedFiles = vi.mocked(computeChangedFiles);
 const mockResetToSha = vi.mocked(resetToSha);
+const mockSquashTaskCommits = vi.mocked(squashTaskCommits);
 const mockParseReviewOutput = vi.mocked(parseReviewOutput);
 const mockHasCriticalFindings = vi.mocked(hasCriticalFindings);
 
@@ -149,8 +173,16 @@ function setupDefaultMocks() {
 		status: "pass",
 		findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
 	});
+	mockSquashTaskCommits.mockResolvedValue({ sha: "squashed123", success: true });
+	mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+	mockComputeProgressSummary.mockReturnValue({
+		tasksCompleted: 1, tasksRemaining: 0, tasksSkipped: 0,
+		cumulativeCost: 0.03, estimatedRemainingCost: 0, currentTaskTitle: "Task 1",
+	});
+	mockFormatProgressSummary.mockReturnValue("Progress: 1 done, 0 remaining | Cost: $0.03");
 	mockGetConfig.mockReturnValue({ validationCommand: "", testCommand: "", validationCadence: "every", validationInterval: 3 } as any);
 	mockShouldRunValidation.mockReturnValue(false);
+	mockEvaluateCheckpointTriggers.mockReturnValue([]);
 	mockResolveFailureAction.mockImplementation((type) => {
 		const defaults: Record<string, string> = {
 			"test-regression": "stop-show-diff",
@@ -297,8 +329,13 @@ describe("runExecutePhase", () => {
 	// --- Spec review ---
 
 	describe("spec review", () => {
-		it("passes spec review and proceeds to quality review", async () => {
+		it("passes both spec and quality reviews in parallel", async () => {
 			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
 			const state = makeState();
 			const result = await runExecutePhase(state, fakeCtx);
 
@@ -307,13 +344,10 @@ describe("runExecutePhase", () => {
 			expect(result.tasks[0].status).toBe("complete");
 		});
 
-		it("retries on spec review failure with fix loop", async () => {
+		it("retries on review failure with parallel fix loop", async () => {
 			setupDefaultMocks();
-			// impl succeeds, then spec fails, then spec passes
-			let specCallCount = 0;
-			mockDispatchAgent.mockImplementation(async (agent) => {
-				return makeResult();
-			});
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			// First round: spec fails. After fix, both pass.
 			mockParseReviewOutput
 				.mockReturnValueOnce({
 					status: "fail",
@@ -333,10 +367,12 @@ describe("runExecutePhase", () => {
 
 			expect(result.tasks[0].fixAttempts).toBe(1);
 			expect(result.tasks[0].reviewsPassed).toContain("spec");
+			expect(result.tasks[0].reviewsPassed).toContain("quality");
 		});
 
-		it("escalates after max spec review retries", async () => {
+		it("escalates after max review retries", async () => {
 			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
 			mockParseReviewOutput.mockReturnValue({
 				status: "fail",
 				findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" },
@@ -355,8 +391,9 @@ describe("runExecutePhase", () => {
 			expect(ctx.ui.select).toHaveBeenCalled();
 		});
 
-		it("escalates on inconclusive spec review", async () => {
+		it("escalates on inconclusive review", async () => {
 			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
 			mockParseReviewOutput.mockReturnValue({
 				status: "inconclusive",
 				rawOutput: "garbage",
@@ -375,28 +412,32 @@ describe("runExecutePhase", () => {
 	// --- Quality review ---
 
 	describe("quality review", () => {
-		it("runs quality review after spec review passes", async () => {
+		it("dispatches spec and quality reviewers together in parallel", async () => {
 			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
 			const state = makeState();
 			const result = await runExecutePhase(state, fakeCtx);
 
-			// Should have dispatched: implementer, spec-reviewer, quality-reviewer
-			const dispatched = mockDispatchAgent.mock.calls.map(c => c[0].name);
-			expect(dispatched).toContain("spec-reviewer");
-			expect(dispatched).toContain("quality-reviewer");
-			// Spec-reviewer dispatched before quality-reviewer
-			const specIdx = dispatched.indexOf("spec-reviewer");
-			const qualIdx = dispatched.indexOf("quality-reviewer");
-			expect(specIdx).toBeLessThan(qualIdx);
+			// Both reviewers dispatched via dispatchParallel
+			expect(mockDispatchParallel).toHaveBeenCalled();
+			const parallelCall = mockDispatchParallel.mock.calls[0];
+			const agentNames = parallelCall[0].map((a: any) => a.name);
+			expect(agentNames).toContain("spec-reviewer");
+			expect(agentNames).toContain("quality-reviewer");
 		});
 
-		it("retries on quality review failure with fix loop", async () => {
+		it("retries on quality review failure with fix loop (parallel re-review)", async () => {
 			setupDefaultMocks();
-			// spec passes, quality fails once then passes
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			// First parallel: spec passes, quality fails. Second parallel: both pass.
 			mockParseReviewOutput
-				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec
-				.mockReturnValueOnce({ status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad quality" }], mustFix: ["fix"], summary: "fail" } }) // quality first
-				.mockReturnValue({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }); // quality retry
+				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec (round 1)
+				.mockReturnValueOnce({ status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad quality" }], mustFix: ["fix"], summary: "fail" } }) // quality (round 1)
+				.mockReturnValue({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }); // all pass (round 2)
 
 			const state = makeState();
 			const result = await runExecutePhase(state, fakeCtx);
@@ -405,11 +446,13 @@ describe("runExecutePhase", () => {
 			expect(result.tasks[0].fixAttempts).toBe(1);
 		});
 
-		it("escalates after max quality review retries", async () => {
+		it("escalates after max review retries (parallel)", async () => {
 			setupDefaultMocks();
-			mockParseReviewOutput
-				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec passes
-				.mockReturnValue({ status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" } }); // quality always fails
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			// All reviews fail
+			mockParseReviewOutput.mockReturnValue({
+				status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" },
+			});
 
 			const ctx = makeCtx();
 			ctx.ui.select.mockResolvedValue("Skip");
@@ -456,11 +499,14 @@ describe("runExecutePhase", () => {
 				],
 				projectAgentsDir: null,
 			});
-			mockDispatchParallel.mockResolvedValue([makeResult()]);
+			// First call: spec+quality parallel (pass), second call: optional parallel (fail)
+			mockDispatchParallel
+				.mockResolvedValueOnce([makeResult(), makeResult()])  // spec+quality
+				.mockResolvedValueOnce([makeResult()]);               // optional (security)
 			mockGetFinalOutput.mockReturnValue('{"passed":false,"findings":[{"severity":"critical","file":"a.ts","issue":"vuln"}],"mustFix":[],"summary":"critical issue"}');
 			mockParseReviewOutput
-				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec
-				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // quality
+				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // spec (parallel)
+				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } }) // quality (parallel)
 				.mockReturnValueOnce({
 					status: "fail",
 					findings: { passed: false, findings: [{ severity: "critical", file: "a.ts", issue: "vuln" }], mustFix: [], summary: "critical" },
@@ -477,10 +523,97 @@ describe("runExecutePhase", () => {
 
 		it("skips optional reviews when no optional reviewers available", async () => {
 			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
 			const state = makeState();
 			const result = await runExecutePhase(state, fakeCtx);
 
-			expect(mockDispatchParallel).not.toHaveBeenCalled();
+			// dispatchParallel called once for spec+quality, but NOT for optional reviewers
+			expect(mockDispatchParallel).toHaveBeenCalledTimes(1);
+			expect(result.tasks[0].status).toBe("complete");
+		});
+	});
+
+	// --- Parallel reviews (D4) ---
+
+	describe("parallel reviews (D4)", () => {
+		it("dispatches spec and quality reviews in parallel via dispatchParallel", async () => {
+			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockGetFinalOutput.mockReturnValue('```superteam-json\n{"passed":true,"findings":[],"mustFix":[],"summary":"ok"}\n```');
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			// dispatchParallel should be called for spec+quality
+			expect(mockDispatchParallel).toHaveBeenCalled();
+			const parallelCall = mockDispatchParallel.mock.calls[0];
+			const agentNames = parallelCall[0].map((a: any) => a.name);
+			expect(agentNames).toContain("spec-reviewer");
+			expect(agentNames).toContain("quality-reviewer");
+			expect(result.tasks[0].status).toBe("complete");
+		});
+
+		it("re-runs BOTH reviews after a fix when one fails", async () => {
+			setupDefaultMocks();
+			let parallelCallCount = 0;
+			mockDispatchParallel.mockImplementation(async () => {
+				parallelCallCount++;
+				return [makeResult(), makeResult()];
+			});
+
+			// First parallel: spec passes, quality fails. Second parallel: both pass.
+			mockParseReviewOutput
+				.mockReturnValueOnce({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } })
+				.mockReturnValueOnce({ status: "fail", findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" } })
+				.mockReturnValue({ status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" } });
+
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			// Two parallel dispatches: initial + after fix
+			expect(parallelCallCount).toBe(2);
+			expect(result.tasks[0].status).toBe("complete");
+		});
+
+		it("escalates after maxRetries when reviews keep failing", async () => {
+			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "fail",
+				findings: { passed: false, findings: [{ severity: "high", file: "a.ts", issue: "bad" }], mustFix: ["fix"], summary: "fail" },
+			});
+
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValue("Skip");
+			const state = makeState({
+				config: {
+					tddMode: "tdd", reviewMode: "iterative", executionMode: "auto",
+					batchSize: 3, maxPlanReviewCycles: 3, maxTaskReviewCycles: 2,
+				},
+			});
+			const result = await runExecutePhase(state, ctx);
+
+			expect(ctx.ui.select).toHaveBeenCalled();
+			expect(result.tasks[0].status).toBe("skipped");
+		});
+
+		it("completes when both reviews pass first try — no fix loop", async () => {
+			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[0].fixAttempts).toBe(0);
 			expect(result.tasks[0].status).toBe("complete");
 		});
 	});
@@ -506,6 +639,85 @@ describe("runExecutePhase", () => {
 			const result = await runExecutePhase(state, fakeCtx);
 
 			expect(result.phase).toBe("finalize");
+		});
+
+		it("squashes commits after task completion and stores commitSha", async () => {
+			setupDefaultMocks();
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(mockSquashTaskCommits).toHaveBeenCalledWith(
+				"/fake/project",
+				"abc123",  // gitShaBeforeImpl
+				1,         // task id
+				"Task 1",  // task title
+			);
+			expect(result.tasks[0].commitSha).toBe("squashed123");
+		});
+
+		it("warns but does not block when squash fails", async () => {
+			setupDefaultMocks();
+			mockSquashTaskCommits.mockResolvedValue({ sha: "", success: false, error: "squash error" });
+
+			const ctx = makeCtx();
+			const state = makeState();
+			const result = await runExecutePhase(state, ctx);
+
+			expect(result.tasks[0].status).toBe("complete");
+			expect(result.tasks[0].commitSha).toBeUndefined();
+			expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("squash"), "warning");
+		});
+
+		it("displays progress summary after each task completion", async () => {
+			setupDefaultMocks();
+			const ctx = makeCtx();
+			const state = makeState();
+			const result = await runExecutePhase(state, ctx);
+
+			expect(mockComputeProgressSummary).toHaveBeenCalled();
+			expect(mockFormatProgressSummary).toHaveBeenCalled();
+			expect(ctx.ui.notify).toHaveBeenCalledWith(
+				expect.stringContaining("Progress"),
+				"info",
+			);
+		});
+
+		it("populates task.summary with title, status, and changedFiles", async () => {
+			setupDefaultMocks();
+			mockComputeChangedFiles.mockResolvedValue(["src/a.ts", "test/a.test.ts"]);
+
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[0].summary).toBeDefined();
+			expect(result.tasks[0].summary!.title).toBe("Task 1");
+			expect(result.tasks[0].summary!.status).toBe("complete");
+			expect(result.tasks[0].summary!.changedFiles).toContain("src/a.ts");
+		});
+	});
+
+	// --- Context forwarding (D6) ---
+
+	describe("context forwarding (D6)", () => {
+		it("passes prior completed task summaries to buildImplPrompt", async () => {
+			setupDefaultMocks();
+
+			const state = makeState({
+				tasks: [
+					makeTask({ id: 1, title: "Task 1", status: "complete", summary: { title: "Task 1", status: "complete", changedFiles: ["src/a.ts"] } }),
+					makeTask({ id: 2, title: "Task 2", status: "pending" }),
+				],
+				currentTaskIndex: 1,
+			});
+
+			const result = await runExecutePhase(state, fakeCtx);
+
+			// Check that the impl dispatch for Task 2 includes prior context
+			const implCalls = mockDispatchAgent.mock.calls.filter(c => c[0].name === "implementer");
+			expect(implCalls.length).toBeGreaterThanOrEqual(1);
+			const implPrompt = implCalls[0][1];
+			expect(implPrompt).toContain("Prior tasks");
+			expect(implPrompt).toContain("Task 1");
 		});
 	});
 
@@ -781,6 +993,68 @@ describe("runExecutePhase", () => {
 			for (const call of ctx.ui.select.mock.calls) {
 				expect(call[1]).toContain("Rollback");
 			}
+		});
+
+		it("resets task metadata on rollback for clean retry", async () => {
+			setupDefaultMocks();
+			mockGetCurrentSha.mockResolvedValue("abc123sha");
+			mockResetToSha.mockResolvedValue(true);
+			mockComputeChangedFiles.mockResolvedValue(["src/changed.ts", "src/other.ts"]);
+
+			// First impl fails → Rollback → retry succeeds
+			let implCallCount = 0;
+			mockDispatchAgent.mockImplementation(async (agent) => {
+				if (agent.name === "implementer") {
+					implCallCount++;
+					if (implCallCount === 1) return makeResult({ exitCode: 1, errorMessage: "Failed" });
+				}
+				return makeResult();
+			});
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValueOnce("Rollback");
+
+			const state = makeState({
+				tasks: [makeTask({
+					reviewsPassed: ["spec"],
+					reviewsFailed: ["quality"],
+					fixAttempts: 2,
+				})],
+			});
+			const result = await runExecutePhase(state, ctx);
+
+			// After rollback, task retries and completes
+			expect(result.tasks[0].status).toBe("complete");
+			// Verify notify was called with file count info
+			expect(ctx.ui.notify).toHaveBeenCalledWith(
+				expect.stringContaining("Rolling back"),
+				"info",
+			);
+		});
+
+		it("notifies how many files will be reverted on rollback", async () => {
+			setupDefaultMocks();
+			mockGetCurrentSha.mockResolvedValue("abc123sha");
+			mockResetToSha.mockResolvedValue(true);
+			mockComputeChangedFiles.mockResolvedValue(["a.ts", "b.ts", "c.ts"]);
+
+			mockDispatchAgent.mockResolvedValue(makeResult({ exitCode: 1, errorMessage: "Failed" }));
+
+			const ctx = makeCtx();
+			ctx.ui.select
+				.mockResolvedValueOnce("Rollback")
+				.mockResolvedValueOnce("Skip");
+
+			const state = makeState();
+			await runExecutePhase(state, ctx);
+
+			// Check that notify mentioned the file count
+			const notifyCalls = ctx.ui.notify.mock.calls.map((c: any) => c[0]);
+			const rollbackNotify = notifyCalls.find((msg: string) => msg.includes("Rolling back"));
+			expect(rollbackNotify).toContain("3 files");
 		});
 	});
 
@@ -1158,25 +1432,214 @@ describe("runExecutePhase", () => {
 		});
 	});
 
+	// --- Full D1-D8 integration ---
+
+	describe("full D1-D8 integration", () => {
+		it("complete task flow: impl → parallel review → squash → summary → advance", async () => {
+			setupDefaultMocks();
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+			mockSquashTaskCommits.mockResolvedValue({ sha: "squashed-sha", success: true });
+			mockComputeProgressSummary.mockReturnValue({
+				tasksCompleted: 1, tasksRemaining: 0, tasksSkipped: 0,
+				cumulativeCost: 0.05, estimatedRemainingCost: 0, currentTaskTitle: "Task 1",
+			});
+			mockFormatProgressSummary.mockReturnValue("Progress: 1 done");
+
+			const state = makeState({
+				tasks: [makeTask({ id: 1, title: "Task 1", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			// Verify complete flow
+			expect(result.tasks[0].status).toBe("complete");
+			expect(result.tasks[0].commitSha).toBe("squashed-sha");
+			expect(result.tasks[0].summary).toBeDefined();
+			expect(mockDispatchParallel).toHaveBeenCalled(); // parallel reviews
+			expect(mockSquashTaskCommits).toHaveBeenCalled(); // squash
+			expect(mockComputeProgressSummary).toHaveBeenCalled(); // progress
+			expect(result.phase).toBe("finalize");
+		});
+	});
+
+	// --- Checkpoint integration ---
+
+	describe("checkpoint integration", () => {
+		it("does not pause when no checkpoint triggers fire", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([]);
+
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[0].status).toBe("complete");
+			expect(result.tasks[1].status).toBe("complete");
+			expect(mockPresentCheckpoint).not.toHaveBeenCalled();
+		});
+
+		it("presents checkpoint when budget-warning trigger fires", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "budget-warning", message: "Budget warning" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("continue");
+
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(mockPresentCheckpoint).toHaveBeenCalled();
+			expect(result.tasks[1].status).toBe("complete");
+		});
+
+		it("aborts workflow when user selects Abort at checkpoint", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "budget-critical", message: "Critical" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("abort");
+
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[0].status).toBe("complete");
+			expect(result.tasks[1].status).toBe("pending");
+			expect(result.error).toBe("Aborted at checkpoint");
+		});
+
+		it("enters plan revision when user selects Adjust at checkpoint", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "scheduled", message: "Scheduled" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("adjust");
+			mockPresentPlanRevision.mockResolvedValue({
+				droppedTaskIds: [],
+				skippedTaskIds: [2],
+				reorderedTaskIds: undefined,
+			});
+			mockApplyPlanAdjustment.mockImplementation((tasks, adj) => {
+				return tasks.map((t: any) =>
+					adj.skippedTaskIds.includes(t.id) ? { ...t, status: "skipped" } : t,
+				);
+			});
+
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(mockPresentPlanRevision).toHaveBeenCalled();
+			expect(result.tasks[1].status).toBe("skipped");
+		});
+
+		it("continues normally when plan revision returns null (cancelled)", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "scheduled", message: "Scheduled" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("adjust");
+			mockPresentPlanRevision.mockResolvedValue(null);
+
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[1].status).toBe("complete");
+		});
+
+		it("calls evaluateCheckpointTriggers with costs from getConfig", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({
+				validationCommand: "",
+				testCommand: "",
+				validationCadence: "every",
+				validationInterval: 3,
+				costs: { warnAtUsd: 10, hardLimitUsd: 50 },
+			} as any);
+			mockEvaluateCheckpointTriggers.mockReturnValue([]);
+
+			const state = makeState();
+			await runExecutePhase(state, fakeCtx);
+
+			expect(mockEvaluateCheckpointTriggers).toHaveBeenCalledWith(
+				expect.any(Object),
+				{ warnAtUsd: 10, hardLimitUsd: 50 },
+			);
+		});
+
+		it("sets lastBudgetCheckpointCostUsd after presenting a budget checkpoint", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({
+				validationCommand: "",
+				testCommand: "",
+				validationCadence: "every",
+				validationInterval: 3,
+				costs: { warnAtUsd: 10, hardLimitUsd: 50 },
+			} as any);
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "budget-warning", message: "Budget warning: $12.00 spent" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("continue");
+
+			const state = makeState({
+				totalCostUsd: 12.0,
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			// Cost accumulates during dispatches, so it will be >= initial 12.0
+			expect(result.lastBudgetCheckpointCostUsd).toBeDefined();
+			expect(result.lastBudgetCheckpointCostUsd).toBeGreaterThanOrEqual(12.0);
+			expect(result.lastBudgetCheckpointCostUsd).toBe(result.totalCostUsd);
+		});
+
+		it("does not set lastBudgetCheckpointCostUsd for non-budget triggers", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "scheduled", message: "Scheduled checkpoint" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("continue");
+
+			const state = makeState({
+				totalCostUsd: 3.0,
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.lastBudgetCheckpointCostUsd).toBeUndefined();
+		});
+	});
+
 	// --- Reviewer write-guard ---
 
 	describe("reviewer write-guard", () => {
-		it("re-dispatches reviewer when hasWriteToolCalls returns true", async () => {
+		it("warns when parallel review results contain write tool calls", async () => {
 			setupDefaultMocks();
 			const mockHasWrite = vi.mocked(hasWriteToolCalls);
-			// First review call has writes, re-dispatch is clean
+			// First parallel result has writes
 			mockHasWrite
 				.mockReturnValueOnce(true)
 				.mockReturnValue(false);
+			mockDispatchParallel.mockResolvedValue([makeResult(), makeResult()]);
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
 
 			const ctx = makeCtx();
 			const state = makeState();
 			const result = await runExecutePhase(state, ctx);
 
-			// Reviewer should have been dispatched twice for spec review (original + re-dispatch)
-			const reviewerCalls = mockDispatchAgent.mock.calls.filter(c => c[0].name === "spec-reviewer");
-			expect(reviewerCalls).toHaveLength(2);
 			expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("write operations"), "warning");
+			expect(result.tasks[0].status).toBe("complete");
 		});
 	});
 });

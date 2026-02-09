@@ -109,3 +109,80 @@ function makeState(overrides: any = {}): any {
     ...overrides,
   };
 }
+
+describe("computeProgressSummary", () => {
+  it("computes correct counts for mixed task states", async () => {
+    const { computeProgressSummary } = await import("./progress.js");
+    const state = makeState({
+      phase: "execute",
+      totalCostUsd: 1.50,
+      tasks: [
+        { id: 1, title: "A", status: "complete" },
+        { id: 2, title: "B", status: "complete" },
+        { id: 3, title: "C", status: "skipped" },
+        { id: 4, title: "D", status: "implementing" },
+        { id: 5, title: "E", status: "pending" },
+      ],
+      currentTaskIndex: 3,
+    });
+
+    const summary = computeProgressSummary(state);
+    expect(summary.tasksCompleted).toBe(2);
+    expect(summary.tasksRemaining).toBe(2); // implementing + pending
+    expect(summary.tasksSkipped).toBe(1);
+    expect(summary.cumulativeCost).toBe(1.50);
+    expect(summary.currentTaskTitle).toBe("D");
+  });
+
+  it("estimates remaining cost based on average", async () => {
+    const { computeProgressSummary } = await import("./progress.js");
+    const state = makeState({
+      totalCostUsd: 3.00,
+      tasks: [
+        { id: 1, title: "A", status: "complete" },
+        { id: 2, title: "B", status: "complete" },
+        { id: 3, title: "C", status: "complete" },
+        { id: 4, title: "D", status: "pending" },
+        { id: 5, title: "E", status: "pending" },
+        { id: 6, title: "F", status: "pending" },
+      ],
+      currentTaskIndex: 3,
+    });
+
+    const summary = computeProgressSummary(state);
+    // 3.00 / 3 completed * 3 remaining = 3.00
+    expect(summary.estimatedRemainingCost).toBeCloseTo(3.00, 1);
+  });
+
+  it("returns 0 estimated cost when no tasks completed", async () => {
+    const { computeProgressSummary } = await import("./progress.js");
+    const state = makeState({
+      totalCostUsd: 0,
+      tasks: [{ id: 1, title: "A", status: "pending" }],
+      currentTaskIndex: 0,
+    });
+
+    const summary = computeProgressSummary(state);
+    expect(summary.estimatedRemainingCost).toBe(0);
+  });
+});
+
+describe("formatProgressSummary", () => {
+  it("formats a readable progress line", async () => {
+    const { formatProgressSummary } = await import("./progress.js");
+    const summary = {
+      tasksCompleted: 3,
+      tasksRemaining: 2,
+      tasksSkipped: 1,
+      cumulativeCost: 1.50,
+      estimatedRemainingCost: 1.00,
+      currentTaskTitle: "Add widget",
+    };
+
+    const formatted = formatProgressSummary(summary);
+    expect(formatted).toContain("3");
+    expect(formatted).toContain("2");
+    expect(formatted).toContain("$1.50");
+    expect(formatted).toContain("$1.00");
+  });
+});

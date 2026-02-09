@@ -73,6 +73,49 @@ export async function resetToSha(cwd: string, sha: string): Promise<boolean> {
 }
 
 /**
+ * Squash all commits since baseSha into one clean workflow commit.
+ * Stages any unstaged changes first. Returns the new SHA.
+ */
+export async function squashTaskCommits(
+	cwd: string,
+	baseSha: string,
+	taskId: number,
+	taskTitle: string,
+): Promise<{ sha: string; success: boolean; error?: string }> {
+	try {
+		// Stage any unstaged changes
+		await execFile("git", ["add", "-A"], { cwd, timeout: 5000 });
+
+		// Check if there are staged changes to commit
+		try {
+			const { stdout: statusOut } = await execFile("git", ["status", "--porcelain"], { cwd, timeout: 5000 });
+			if (statusOut.trim()) {
+				await execFile("git", ["commit", "-m", "wip"], { cwd, timeout: 5000 });
+			}
+		} catch {
+			// No staged changes — fine
+		}
+
+		// Check if HEAD moved from baseSha
+		const headNow = await getCurrentSha(cwd);
+		if (headNow === baseSha) {
+			return { sha: baseSha, success: true };
+		}
+
+		const message = `workflow: task ${taskId} — ${taskTitle}`;
+		const squashed = await squashCommitsSince(cwd, baseSha, message);
+		if (!squashed) {
+			return { sha: headNow, success: false, error: "squashCommitsSince failed" };
+		}
+
+		const newSha = await getCurrentSha(cwd);
+		return { sha: newSha, success: true };
+	} catch (err: any) {
+		return { sha: "", success: false, error: err.message };
+	}
+}
+
+/**
  * Squash all commits since `baseSha` into a single commit with the given message.
  * If baseSha equals HEAD (no new commits), this is a no-op returning true.
  * Returns false on any failure.

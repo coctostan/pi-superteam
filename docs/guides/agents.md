@@ -34,7 +34,7 @@ Dispatch scout to find all files related to authentication and describe the auth
 
 The implementer subprocess loads:
 - `-e <packageDir>/src/index.ts` — TDD guard enforces test-first
-- `--skill <packageDir>/skills/test-driven-development/SKILL.md` — teaches RED→GREEN→REFACTOR
+- `--skill <packageDir>/skills/superteam-test-driven-development/SKILL.md` — teaches RED→GREEN→REFACTOR
 
 ### brainstormer
 
@@ -307,4 +307,4 @@ This means:
 
 The `--thinking` flag is only included when `resolveAgentThinking()` returns a non-undefined value.
 
-The implementer is special: it additionally gets `-e <packageDir>/src/index.ts` (TDD guard) and `--skill <packageDir>/skills/test-driven-development/SKILL.md`.
+The implementer is special: it additionally gets `-e <packageDir>/src/index.ts` (TDD guard) and `--skill <packageDir>/skills/superteam-test-driven-development/SKILL.md`.

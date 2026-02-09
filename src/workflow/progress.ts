@@ -131,6 +131,50 @@ function capitalize(s: string): string {
 	return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// --- Task progress summary (D5) ---
+
+export interface TaskProgressSummary {
+	tasksCompleted: number;
+	tasksRemaining: number;
+	tasksSkipped: number;
+	cumulativeCost: number;
+	estimatedRemainingCost: number;
+	currentTaskTitle: string;
+}
+
+export function computeProgressSummary(state: ProgressState): TaskProgressSummary {
+	const tasksCompleted = state.tasks.filter(t => t.status === "complete").length;
+	const tasksSkipped = state.tasks.filter(t => t.status === "skipped").length;
+	const tasksRemaining = state.tasks.length - tasksCompleted - tasksSkipped;
+	const cumulativeCost = state.totalCostUsd;
+
+	const avgCostPerTask = tasksCompleted > 0 ? cumulativeCost / tasksCompleted : 0;
+	const estimatedRemainingCost = avgCostPerTask * tasksRemaining;
+
+	const currentTask = state.tasks[state.currentTaskIndex];
+	const currentTaskTitle = currentTask?.title ?? "";
+
+	return {
+		tasksCompleted,
+		tasksRemaining,
+		tasksSkipped,
+		cumulativeCost,
+		estimatedRemainingCost,
+		currentTaskTitle,
+	};
+}
+
+export function formatProgressSummary(summary: TaskProgressSummary): string {
+	const parts = [
+		`Progress: ${summary.tasksCompleted} done, ${summary.tasksRemaining} remaining`,
+	];
+	if (summary.tasksSkipped > 0) {
+		parts[0] += `, ${summary.tasksSkipped} skipped`;
+	}
+	parts.push(`Cost: $${summary.cumulativeCost.toFixed(2)} (est. remaining: $${summary.estimatedRemainingCost.toFixed(2)})`);
+	return parts.join(" | ");
+}
+
 /**
  * Write progress file to disk. No-op if path can't be derived.
  */

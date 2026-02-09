@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractFencedBlock, extractLastBraceBlock, sanitizeJsonNewlines } from "./parse-utils.js";
+import { extractFencedBlock, extractLastBraceBlock, sanitizeJsonNewlines, stripAnsi } from "./parse-utils.js";
 
 
 describe("extractFencedBlock", () => {
@@ -102,5 +102,45 @@ describe("sanitizeJsonNewlines", () => {
 
   it("handles multiple literal newlines in multiple strings", () => {
     expect(sanitizeJsonNewlines('{"a":"x\ny","b":"p\nq"}')).toBe('{"a":"x\\ny","b":"p\\nq"}');
+  });
+});
+
+describe("stripAnsi", () => {
+  it("returns plain text unchanged", () => {
+    expect(stripAnsi("hello world")).toBe("hello world");
+  });
+
+  it("strips basic color codes (e.g., red)", () => {
+    expect(stripAnsi("\x1b[31mred text\x1b[0m")).toBe("red text");
+  });
+
+  it("strips bold/bright codes", () => {
+    expect(stripAnsi("\x1b[1m\x1b[32mbold green\x1b[0m")).toBe("bold green");
+  });
+
+  it("strips multiple ANSI codes in a string", () => {
+    expect(stripAnsi("\x1b[31mred\x1b[0m and \x1b[34mblue\x1b[0m")).toBe("red and blue");
+  });
+
+  it("strips 256-color codes", () => {
+    expect(stripAnsi("\x1b[38;5;196mcolor\x1b[0m")).toBe("color");
+  });
+
+  it("strips 24-bit RGB color codes", () => {
+    expect(stripAnsi("\x1b[38;2;255;0;0mrgb\x1b[0m")).toBe("rgb");
+  });
+
+  it("preserves JSON structure with ANSI codes stripped", () => {
+    const input = '\x1b[1m```superteam-json\x1b[0m\n{"passed":true}\n\x1b[1m```\x1b[0m';
+    const result = stripAnsi(input);
+    expect(result).toBe('```superteam-json\n{"passed":true}\n```');
+  });
+
+  it("handles empty string", () => {
+    expect(stripAnsi("")).toBe("");
+  });
+
+  it("strips cursor movement sequences", () => {
+    expect(stripAnsi("\x1b[2Jhello\x1b[H")).toBe("hello");
   });
 });

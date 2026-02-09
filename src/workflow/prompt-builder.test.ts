@@ -260,6 +260,13 @@ describe("buildSpecReviewPrompt", () => {
 		const result = buildSpecReviewPrompt(task, ["src/widget.ts"]);
 		expect(result).toContain("do not review test files unless the task description explicitly targets test code");
 	});
+
+	it("includes test-file-only check instruction (D8a)", () => {
+		const task = makeTask();
+		const result = buildSpecReviewPrompt(task, ["src/widget.test.ts"]);
+		expect(result.toLowerCase()).toContain("only test files");
+		expect(result.toLowerCase()).toContain("implementation files");
+	});
 });
 
 // --- buildQualityReviewPrompt ---
@@ -332,6 +339,54 @@ describe("REVIEW_OUTPUT_FORMAT removal", () => {
 			const content = fs.readFileSync(path.join(agentsDir, name + ".md"), "utf-8");
 			expect(content).toContain("```superteam-json");
 		}
+	});
+});
+
+// --- buildImplPrompt prior task context (D6) ---
+
+describe("buildImplPrompt prior task context (D6)", () => {
+	it("includes last 5 prior tasks when provided as array", () => {
+		const task = makeTask();
+		const priorTasks = Array.from({ length: 7 }, (_, i) => ({
+			title: `Task ${i + 1}`,
+			status: "complete",
+			changedFiles: [`src/file${i + 1}.ts`],
+		}));
+
+		const result = buildImplPrompt(task, "ctx", undefined, priorTasks);
+		expect(result).toContain("## Prior tasks");
+		// Should only have last 5 (tasks 3-7)
+		expect(result).not.toContain("Task 1");
+		expect(result).not.toContain("Task 2");
+		expect(result).toContain("Task 3");
+		expect(result).toContain("Task 7");
+		expect(result).toContain("src/file7.ts");
+	});
+
+	it("includes all prior tasks when fewer than 5", () => {
+		const task = makeTask();
+		const priorTasks = [
+			{ title: "Setup", status: "complete", changedFiles: ["src/setup.ts"] },
+			{ title: "Config", status: "complete", changedFiles: ["src/config.ts"] },
+		];
+
+		const result = buildImplPrompt(task, "ctx", undefined, priorTasks);
+		expect(result).toContain("Setup");
+		expect(result).toContain("Config");
+	});
+
+	it("omits prior tasks section when array is empty", () => {
+		const task = makeTask();
+		const result = buildImplPrompt(task, "ctx", undefined, []);
+		expect(result).not.toContain("## Prior tasks");
+	});
+
+	it("still supports legacy single previousTaskSummary", () => {
+		const task = makeTask();
+		const summary = { title: "Legacy", status: "complete", changedFiles: ["src/old.ts"] };
+		const result = buildImplPrompt(task, "ctx", summary);
+		expect(result).toContain("## Previous task");
+		expect(result).toContain("Legacy");
 	});
 });
 
