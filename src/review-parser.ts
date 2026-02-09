@@ -9,6 +9,7 @@ import {
 	extractFencedBlock,
 	extractLastBraceBlock,
 	sanitizeJsonNewlines,
+	stripAnsi,
 } from "./parse-utils.js";
 
 // --- Types ---
@@ -44,14 +45,17 @@ export type ParseResult =
  * 3. If neither: inconclusive
  */
 export function parseReviewOutput(rawOutput: string): ParseResult {
+	// Strip ANSI escape codes that reviewers may emit from subprocess output
+	const cleanOutput = stripAnsi(rawOutput);
+
 	// Try fenced block first
-	const fenced = extractFencedBlock(rawOutput, "superteam-json");
+	const fenced = extractFencedBlock(cleanOutput, "superteam-json");
 	if (fenced) {
 		return parseAndValidate(fenced, rawOutput);
 	}
 
 	// Fallback: last brace-matched block
-	const braceMatch = extractLastBraceBlock(rawOutput);
+	const braceMatch = extractLastBraceBlock(cleanOutput);
 	if (braceMatch) {
 		return parseAndValidate(braceMatch, rawOutput);
 	}
