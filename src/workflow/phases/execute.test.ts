@@ -812,6 +812,68 @@ describe("runExecutePhase", () => {
 				expect(call[1]).toContain("Rollback");
 			}
 		});
+
+		it("resets task metadata on rollback for clean retry", async () => {
+			setupDefaultMocks();
+			mockGetCurrentSha.mockResolvedValue("abc123sha");
+			mockResetToSha.mockResolvedValue(true);
+			mockComputeChangedFiles.mockResolvedValue(["src/changed.ts", "src/other.ts"]);
+
+			// First impl fails → Rollback → retry succeeds
+			let implCallCount = 0;
+			mockDispatchAgent.mockImplementation(async (agent) => {
+				if (agent.name === "implementer") {
+					implCallCount++;
+					if (implCallCount === 1) return makeResult({ exitCode: 1, errorMessage: "Failed" });
+				}
+				return makeResult();
+			});
+			mockParseReviewOutput.mockReturnValue({
+				status: "pass", findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
+			});
+
+			const ctx = makeCtx();
+			ctx.ui.select.mockResolvedValueOnce("Rollback");
+
+			const state = makeState({
+				tasks: [makeTask({
+					reviewsPassed: ["spec"],
+					reviewsFailed: ["quality"],
+					fixAttempts: 2,
+				})],
+			});
+			const result = await runExecutePhase(state, ctx);
+
+			// After rollback, task retries and completes
+			expect(result.tasks[0].status).toBe("complete");
+			// Verify notify was called with file count info
+			expect(ctx.ui.notify).toHaveBeenCalledWith(
+				expect.stringContaining("Rolling back"),
+				"info",
+			);
+		});
+
+		it("notifies how many files will be reverted on rollback", async () => {
+			setupDefaultMocks();
+			mockGetCurrentSha.mockResolvedValue("abc123sha");
+			mockResetToSha.mockResolvedValue(true);
+			mockComputeChangedFiles.mockResolvedValue(["a.ts", "b.ts", "c.ts"]);
+
+			mockDispatchAgent.mockResolvedValue(makeResult({ exitCode: 1, errorMessage: "Failed" }));
+
+			const ctx = makeCtx();
+			ctx.ui.select
+				.mockResolvedValueOnce("Rollback")
+				.mockResolvedValueOnce("Skip");
+
+			const state = makeState();
+			await runExecutePhase(state, ctx);
+
+			// Check that notify mentioned the file count
+			const notifyCalls = ctx.ui.notify.mock.calls.map((c: any) => c[0]);
+			const rollbackNotify = notifyCalls.find((msg: string) => msg.includes("Rolling back"));
+			expect(rollbackNotify).toContain("3 files");
+		});
 	});
 
 	// --- Validation gate ---

@@ -140,7 +140,8 @@ export async function runExecutePhase(
 				saveState(state, ctx.cwd);
 				continue;
 			}
-			// retry — continue loop to try again
+			// retry — decrement so for-loop re-runs this index
+			i--;
 			continue;
 		}
 
@@ -166,8 +167,9 @@ export async function runExecutePhase(
 				saveState(state, ctx.cwd);
 				continue;
 			}
-			// retry
+			// retry — decrement so for-loop re-runs this index
 			task.status = "pending";
+			i--;
 			continue;
 		}
 
@@ -211,6 +213,7 @@ export async function runExecutePhase(
 									continue;
 								}
 								task.status = "pending";
+								i--;
 								continue;
 							}
 						}
@@ -235,6 +238,7 @@ export async function runExecutePhase(
 							}
 						}
 						task.status = "pending";
+						i--;
 						continue;
 					}
 				}
@@ -416,7 +420,16 @@ async function escalate(
 	if (choice === "Skip") return "skip";
 	if (choice === "Rollback") {
 		if (task.gitShaBeforeImpl) {
+			const files = await computeChangedFiles(cwd, task.gitShaBeforeImpl);
+			ui?.notify?.(
+				`Rolling back task "${task.title}": reverting ${files.length} files to ${task.gitShaBeforeImpl.slice(0, 7)}`,
+				"info",
+			);
 			await resetToSha(cwd, task.gitShaBeforeImpl);
+			// Reset task state for clean retry
+			task.reviewsPassed = [];
+			task.reviewsFailed = [];
+			task.fixAttempts = 0;
 		}
 		return "retry";
 	}
