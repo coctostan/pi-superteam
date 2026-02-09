@@ -164,6 +164,8 @@ export function buildSpecReviewPrompt(task: TaskExecState, changedFiles: string[
 		`Only review files listed below — do not review test files unless the task description explicitly targets test code.`,
 		`Read these files. Compare implementation against spec.`,
 		`Do NOT trust the implementer's self-report — verify independently.`,
+		``,
+		`Verify that implementation files were modified, not only test files. If only test files changed, flag as a critical finding.`,
 		].join("\n");
 }
 

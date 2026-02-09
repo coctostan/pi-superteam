@@ -260,6 +260,13 @@ describe("buildSpecReviewPrompt", () => {
 		const result = buildSpecReviewPrompt(task, ["src/widget.ts"]);
 		expect(result).toContain("do not review test files unless the task description explicitly targets test code");
 	});
+
+	it("includes test-file-only check instruction (D8a)", () => {
+		const task = makeTask();
+		const result = buildSpecReviewPrompt(task, ["src/widget.test.ts"]);
+		expect(result.toLowerCase()).toContain("only test files");
+		expect(result.toLowerCase()).toContain("implementation files");
+	});
 });
 
 // --- buildQualityReviewPrompt ---
