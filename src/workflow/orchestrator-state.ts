@@ -106,6 +106,7 @@ export type OrchestratorState = {
   /** @deprecated Kept for backward compatibility. Use ctx.ui.* instead. */
   pendingInteraction?: PendingInteraction;
   error?: string;
+  lastValidationFailed?: boolean;
   testBaseline?: TestBaseline;
   gitStartingSha?: string;
   gitBranch?: string;

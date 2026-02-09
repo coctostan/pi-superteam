@@ -375,6 +375,9 @@ export async function runExecutePhase(
 			}
 		}
 
+		// Clear validation failure flag after checkpoint has had a chance to use it
+		state.lastValidationFailed = false;
+
 		// h2. CROSS-TASK VALIDATION
 		{
 			const crossConfig = getConfig(ctx.cwd);
@@ -397,6 +400,7 @@ export async function runExecutePhase(
 
 					// Classify regressions via taxonomy
 					if (!valResult.passed) {
+						state.lastValidationFailed = true;
 						const regressionAction = resolveFailureAction("test-regression");
 						const failNames = valResult.blockingFailures.map(f => f.name).join(", ");
 

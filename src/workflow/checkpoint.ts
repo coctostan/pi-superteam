@@ -5,6 +5,7 @@
 
 export type CheckpointTriggerType =
   | "scheduled"
+  | "test-failure"
   | "budget-warning"
   | "budget-critical";
 
@@ -24,6 +25,7 @@ interface CheckpointState {
   tasks: Array<{ status: string }>;
   currentTaskIndex: number;
   totalCostUsd: number;
+  lastValidationFailed?: boolean;
 }
 
 /**
@@ -55,6 +57,14 @@ export function evaluateCheckpointTriggers(
     triggers.push({
       type: "budget-warning",
       message: `Budget warning: $${state.totalCostUsd.toFixed(2)} spent (warn threshold: $${costs.warnAtUsd.toFixed(2)})`,
+    });
+  }
+
+  // Test failure: cross-task validation detected an issue
+  if (state.lastValidationFailed) {
+    triggers.push({
+      type: "test-failure",
+      message: "Cross-task validation detected test failures",
     });
   }
 

@@ -121,6 +121,44 @@ describe("evaluateCheckpointTriggers", () => {
     expect(types).not.toContain("scheduled");
   });
 
+  it("returns test-failure trigger when lastValidationFailed is true", () => {
+    const state = makeState({
+      totalCostUsd: 1.0,
+      config: { executionMode: "auto" },
+      tasks: [
+        { id: 1, title: "A", status: "complete" },
+        { id: 2, title: "B", status: "pending" },
+      ],
+      currentTaskIndex: 1,
+      lastValidationFailed: true,
+    });
+    const triggers = evaluateCheckpointTriggers(state, {
+      warnAtUsd: 25,
+      hardLimitUsd: 75,
+    });
+    expect(triggers).toContainEqual(
+      expect.objectContaining({ type: "test-failure" }),
+    );
+  });
+
+  it("does not return test-failure trigger when lastValidationFailed is false/undefined", () => {
+    const state = makeState({
+      totalCostUsd: 1.0,
+      config: { executionMode: "auto" },
+      tasks: [
+        { id: 1, title: "A", status: "complete" },
+        { id: 2, title: "B", status: "pending" },
+      ],
+      currentTaskIndex: 1,
+    });
+    const triggers = evaluateCheckpointTriggers(state, {
+      warnAtUsd: 25,
+      hardLimitUsd: 75,
+    });
+    const types = triggers.map(t => t.type);
+    expect(types).not.toContain("test-failure");
+  });
+
   it("does not fire any triggers when all tasks are complete (nothing remaining)", () => {
     const state = makeState({
       totalCostUsd: 30.0,
