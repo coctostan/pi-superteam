@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { evaluateCheckpointTriggers, formatCheckpointMessage, presentCheckpoint, applyPlanAdjustment, type CheckpointTrigger, type PlanAdjustment } from "./checkpoint.js";
+import { evaluateCheckpointTriggers, formatCheckpointMessage, presentCheckpoint, applyPlanAdjustment, parsePlanRevisionInput, presentPlanRevision, type CheckpointTrigger, type PlanAdjustment } from "./checkpoint.js";
 
 function makeState(overrides: any = {}): any {
   return {
@@ -264,5 +264,135 @@ describe("applyPlanAdjustment", () => {
     const adj: PlanAdjustment = { droppedTaskIds: [], skippedTaskIds: [], reorderedTaskIds: undefined };
     const result = applyPlanAdjustment(tasks, adj);
     expect(result.map(t => t.id)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("parsePlanRevisionInput", () => {
+  it("returns null for empty/whitespace input", () => {
+    expect(parsePlanRevisionInput("", [2, 3, 4])).toBeNull();
+    expect(parsePlanRevisionInput("  \n  ", [2, 3, 4])).toBeNull();
+  });
+
+  it("identifies dropped tasks (IDs present in original but missing from edited)", () => {
+    const result = parsePlanRevisionInput(
+      "2. Task 2\n4. Task 4",
+      [2, 3, 4],
+    );
+    expect(result).not.toBeNull();
+    expect(result!.droppedTaskIds).toEqual([3]);
+  });
+
+  it("identifies skipped tasks (lines prefixed with skip:)", () => {
+    const result = parsePlanRevisionInput(
+      "2. Task 2\nskip: 3. Task 3\n4. Task 4",
+      [2, 3, 4],
+    );
+    expect(result).not.toBeNull();
+    expect(result!.skippedTaskIds).toEqual([3]);
+  });
+
+  it("detects reordering", () => {
+    const result = parsePlanRevisionInput(
+      "4. Task 4\n2. Task 2\n3. Task 3",
+      [2, 3, 4],
+    );
+    expect(result).not.toBeNull();
+    expect(result!.reorderedTaskIds).toEqual([4, 2, 3]);
+  });
+
+  it("returns no reorder when order is unchanged", () => {
+    const result = parsePlanRevisionInput(
+      "2. Task 2\n3. Task 3\n4. Task 4",
+      [2, 3, 4],
+    );
+    expect(result).not.toBeNull();
+    expect(result!.reorderedTaskIds).toBeUndefined();
+  });
+
+  it("handles combined drop + skip + reorder", () => {
+    const result = parsePlanRevisionInput(
+      "4. Task 4\nskip: 2. Task 2",
+      [2, 3, 4],
+    );
+    expect(result).not.toBeNull();
+    expect(result!.droppedTaskIds).toEqual([3]);
+    expect(result!.skippedTaskIds).toEqual([2]);
+    expect(result!.reorderedTaskIds).toEqual([4, 2]);
+  });
+});
+
+describe("presentPlanRevision", () => {
+  function makeTasks(statuses: string[]) {
+    return statuses.map((s, i) => ({
+      id: i + 1,
+      title: `Task ${i + 1}`,
+      description: `Do task ${i + 1}`,
+      files: [`src/${i + 1}.ts`],
+      status: s,
+      reviewsPassed: [] as string[],
+      reviewsFailed: [] as string[],
+      fixAttempts: 0,
+    }));
+  }
+
+  it("returns null when editor returns undefined (cancelled)", async () => {
+    const ui = {
+      editor: async () => undefined,
+      confirm: async () => false,
+    };
+    const tasks = makeTasks(["complete", "pending", "pending"]);
+    const result = await presentPlanRevision(tasks, ui as any);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when user rejects confirmation", async () => {
+    const ui = {
+      editor: async () => "2. Task 2\n3. Task 3",
+      confirm: async () => false,
+    };
+    const tasks = makeTasks(["complete", "pending", "pending"]);
+    const result = await presentPlanRevision(tasks, ui as any);
+    expect(result).toBeNull();
+  });
+
+  it("returns PlanAdjustment when user edits and confirms", async () => {
+    const ui = {
+      editor: async () => "3. Task 3", // dropped task 2
+      confirm: async () => true,
+    };
+    const tasks = makeTasks(["complete", "pending", "pending"]);
+    const result = await presentPlanRevision(tasks, ui as any);
+    expect(result).not.toBeNull();
+    expect(result!.droppedTaskIds).toEqual([2]);
+  });
+
+  it("pre-fills editor with only non-complete tasks", async () => {
+    let editorContent = "";
+    const ui = {
+      editor: async (prompt: string, initial: string) => {
+        editorContent = initial;
+        return initial; // no changes
+      },
+      confirm: async () => true,
+    };
+    const tasks = makeTasks(["complete", "complete", "pending", "pending"]);
+    await presentPlanRevision(tasks, ui as any);
+    expect(editorContent).not.toContain("Task 1");
+    expect(editorContent).not.toContain("Task 2");
+    expect(editorContent).toContain("Task 3");
+    expect(editorContent).toContain("Task 4");
+  });
+
+  it("uses ui.select fallback when ui.editor is not available", async () => {
+    const selectResponses = ["Drop task 3", "Done"];
+    let selectIdx = 0;
+    const ui = {
+      select: async () => selectResponses[selectIdx++],
+      notify: async () => {},
+    };
+    const tasks = makeTasks(["complete", "pending", "pending"]);
+    const result = await presentPlanRevision(tasks, ui as any);
+    expect(result).not.toBeNull();
+    expect(result!.droppedTaskIds).toEqual([3]);
   });
 });
