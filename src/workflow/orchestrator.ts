@@ -78,12 +78,13 @@ export async function runWorkflowLoop(
 					const { promisify } = await import("node:util");
 					const exec = promisify(execFileCb);
 					await exec("git", ["checkout", "-b", branchName], { cwd: ctx.cwd });
+					state.gitBranch = branchName;
 					ui?.notify?.(`Created branch: ${branchName}`, "info");
 				}
 			}
 
 			state.gitStartingSha = preflight.sha;
-			state.gitBranch = preflight.branch;
+			if (!state.gitBranch) state.gitBranch = preflight.branch;
 			saveState(state, ctx.cwd);
 		} catch (err: any) {
 			// Non-fatal — not a git repo or git not available

@@ -14,6 +14,11 @@ vi.mock("./phases/execute.js", () => ({ runExecutePhase: vi.fn() }));
 vi.mock("./phases/finalize.js", () => ({ runFinalizePhase: vi.fn() }));
 vi.mock("./progress.js", () => ({ writeProgressFile: vi.fn() }));
 vi.mock("./git-preflight.js", () => ({ runGitPreflight: vi.fn() }));
+vi.mock("node:child_process", () => ({ execFile: vi.fn((_cmd: string, _args: string[], _opts: any, cb: any) => cb(null, "", "")) }));
+vi.mock("node:util", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("node:util")>();
+  return { ...orig, promisify: (_fn: any) => vi.fn().mockResolvedValue({ stdout: "", stderr: "" }) };
+});
 
 import { saveState } from "./orchestrator-state.ts";
 import { runBrainstormPhase } from "./phases/brainstorm.ts";
@@ -216,6 +221,27 @@ describe("runWorkflowLoop", () => {
       expect(ctx.ui.select).toHaveBeenCalled();
       const selectArgs = ctx.ui.select.mock.calls[0];
       expect(selectArgs[1]).toEqual(expect.arrayContaining(["Continue on main"]));
+    });
+
+    it("sets gitBranch to new branch name when user creates workflow branch", async () => {
+      const { runWorkflowLoop } = await import("./orchestrator.js");
+      mockGitPreflight.mockResolvedValue({
+        clean: true, branch: "main", isMainBranch: true,
+        sha: "abc123", uncommittedFiles: [], warnings: ["On main branch"],
+      });
+      mockBrainstorm.mockImplementation(async (state) => {
+        state.phase = "done";
+        return state;
+      });
+
+      const ctx = makeCtx();
+      ctx.ui.select.mockResolvedValue("Create workflow branch");
+
+      const state = { phase: "brainstorm", brainstorm: { step: "scout" }, totalCostUsd: 0, userDescription: "Add login feature", tasks: [], currentTaskIndex: 0 } as any;
+      const result = await runWorkflowLoop(state, ctx);
+
+      expect(result.gitBranch).toBe("workflow/add-login-feature");
+      expect(result.gitStartingSha).toBe("abc123");
     });
 
     it("silently skips preflight in non-git directories", async () => {

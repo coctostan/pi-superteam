@@ -213,8 +213,6 @@ export interface TaskProgressSummary {
   tasksSkipped: number;
   cumulativeCost: number;
   estimatedRemainingCost: number;
-  changedFilesSoFar: string[];
-  fixCyclesSoFar: number;
   currentTaskTitle: string;
 }
 

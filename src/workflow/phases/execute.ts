@@ -493,13 +493,28 @@ async function runParallelReviewLoop(
 			task.fixAttempts++;
 			saveState(state, ctx.cwd);
 
-			// Find first failure's findings for the fix prompt
-			const failIdx = parsed.findIndex(p => p.status === "fail");
-			const failParsed = parsed[failIdx] as { status: "fail"; findings: ReviewFindings };
+			// Merge findings from ALL failed reviews into a single fix prompt
+			const allFindings: string[] = [];
+			for (let j = 0; j < parsed.length; j++) {
+				if (parsed[j].status === "fail") {
+					const failParsed = parsed[j] as { status: "fail"; findings: ReviewFindings };
+					allFindings.push(formatFindings(failParsed.findings, reviewNames[j]));
+				}
+			}
+			const mergedFixPrompt = [
+				`Fix these review findings for task "${task.title}".`,
+				``,
+				allFindings.join("\n\n"),
+				``,
+				`## Changed files`,
+				currentChangedFiles.map((f) => `- ${f}`).join("\n"),
+				``,
+				`Update tests if needed. Use TDD — fix failing tests first if any.`,
+			].join("\n");
 
 			const fixResult = await dispatchAgent(
 				implementer,
-				buildFixPrompt(task, reviewNames[failIdx], failParsed.findings, currentChangedFiles),
+				mergedFixPrompt,
 				ctx.cwd, signal, undefined, makeOnStreamEvent(),
 			);
 			state.totalCostUsd += fixResult.usage.cost;
@@ -555,103 +570,4 @@ async function escalate(
 	return "retry";
 }
 
-// --- Review loop helper ---
 
-async function runReviewLoop(
-	state: OrchestratorState,
-	task: TaskExecState,
-	reviewType: string,
-	reviewer: AgentProfile | undefined,
-	implementer: AgentProfile,
-	changedFiles: string[],
-	maxRetries: number,
-	ctx: { cwd: string },
-	signal: AbortSignal | undefined,
-	ui: any,
-	makeOnStreamEvent: () => OnStreamEvent,
-	buildPrompt: (task: TaskExecState, changedFiles: string[]) => string,
-): Promise<"passed" | "escalated"> {
-	if (!reviewer) {
-		task.reviewsPassed.push(reviewType);
-		return "passed";
-	}
-
-	task.status = "reviewing";
-	saveState(state, ctx.cwd);
-
-	let currentChangedFiles = changedFiles;
-
-	for (let attempt = 0; attempt < maxRetries; attempt++) {
-		let reviewResult = await dispatchAgent(
-			reviewer, buildPrompt(task, currentChangedFiles), ctx.cwd, signal, undefined, makeOnStreamEvent(),
-		);
-		state.totalCostUsd += reviewResult.usage.cost;
-
-		// Write-guard: if reviewer wrote files, warn and re-dispatch once
-		if (hasWriteToolCalls(reviewResult.messages)) {
-			ui?.notify?.(`Reviewer ${reviewType} attempted write operations — re-dispatching`, "warning");
-			reviewResult = await dispatchAgent(
-				reviewer, buildPrompt(task, currentChangedFiles), ctx.cwd, signal, undefined, makeOnStreamEvent(),
-			);
-			state.totalCostUsd += reviewResult.usage.cost;
-			if (hasWriteToolCalls(reviewResult.messages)) {
-				ui?.notify?.(`Reviewer ${reviewType} wrote files on retry — escalating`, "warning");
-			}
-		}
-
-		const output = getFinalOutput(reviewResult.messages);
-		const parsed = parseReviewOutput(output);
-
-		if (parsed.status === "pass") {
-			task.reviewsPassed.push(reviewType);
-			return "passed";
-		}
-
-		if (parsed.status === "inconclusive") {
-			const escalation = await escalate(task, `${reviewType} review was inconclusive: ${parsed.parseError}`, ui, ctx.cwd);
-			if (escalation === "abort") {
-				state.error = "Aborted by user";
-				saveState(state, ctx.cwd);
-				return "escalated";
-			}
-			if (escalation === "skip") {
-				task.status = "skipped";
-				saveState(state, ctx.cwd);
-				return "escalated";
-			}
-			continue;
-		}
-
-		// status === "fail"
-		if (attempt < maxRetries - 1) {
-			task.status = "fixing";
-			task.fixAttempts++;
-			saveState(state, ctx.cwd);
-
-			const fixResult = await dispatchAgent(
-				implementer,
-				buildFixPrompt(task, reviewType, parsed.findings, currentChangedFiles),
-				ctx.cwd, signal, undefined, makeOnStreamEvent(),
-			);
-			state.totalCostUsd += fixResult.usage.cost;
-
-			currentChangedFiles = await computeChangedFiles(ctx.cwd, task.gitShaBeforeImpl);
-			task.status = "reviewing";
-			saveState(state, ctx.cwd);
-		} else {
-			const escalation = await escalate(task, `${reviewType} review failed after ${maxRetries} attempts`, ui, ctx.cwd);
-			if (escalation === "abort") {
-				state.error = "Aborted by user";
-				saveState(state, ctx.cwd);
-				return "escalated";
-			}
-			if (escalation === "skip") {
-				task.status = "skipped";
-				saveState(state, ctx.cwd);
-				return "escalated";
-			}
-		}
-	}
-
-	return "passed";
-}
