@@ -1,7 +1,7 @@
 import type { OrchestratorState, TaskExecState } from "../orchestrator-state.js";
 import { saveState } from "../orchestrator-state.js";
 import { buildImplPrompt, buildFixPrompt, buildSpecReviewPrompt, buildQualityReviewPrompt, extractPlanContext } from "../prompt-builder.js";
-import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.js";
+import { getCurrentSha, computeChangedFiles, resetToSha, squashTaskCommits } from "../git-utils.js";
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, hasWriteToolCalls, type AgentProfile, type OnStreamEvent } from "../../dispatch.js";
 import { parseReviewOutput, formatFindings, hasCriticalFindings, type ReviewFindings, type ParseResult } from "../../review-parser.js";
 import { formatToolAction, formatTaskProgress, createActivityBuffer } from "../ui.js";
@@ -301,6 +301,17 @@ export async function runExecutePhase(
 
 		// h. COMPLETE
 		task.status = "complete";
+
+		// h1. SQUASH COMMITS
+		if (task.gitShaBeforeImpl) {
+			const squashResult = await squashTaskCommits(ctx.cwd, task.gitShaBeforeImpl, task.id, task.title);
+			if (squashResult.success) {
+				task.commitSha = squashResult.sha;
+			} else {
+				ui?.notify?.(`Warning: commit squash failed for task ${task.id}: ${squashResult.error}`, "warning");
+			}
+		}
+
 		state.currentTaskIndex = i + 1;
 		saveState(state, ctx.cwd);
 

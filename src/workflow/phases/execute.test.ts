@@ -20,6 +20,7 @@ vi.mock("../git-utils.js", () => ({
 	getCurrentSha: vi.fn(),
 	computeChangedFiles: vi.fn(),
 	resetToSha: vi.fn(),
+	squashTaskCommits: vi.fn(),
 }));
 
 vi.mock("../../review-parser.js", async (importOriginal) => {
@@ -57,7 +58,7 @@ vi.mock("../test-baseline.js", () => ({
 
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, hasWriteToolCalls } from "../../dispatch.ts";
 import { saveState } from "../orchestrator-state.ts";
-import { getCurrentSha, computeChangedFiles, resetToSha } from "../git-utils.ts";
+import { getCurrentSha, computeChangedFiles, resetToSha, squashTaskCommits } from "../git-utils.ts";
 import { parseReviewOutput, hasCriticalFindings } from "../../review-parser.ts";
 import { getConfig } from "../../config.ts";
 import { runExecutePhase, runValidation } from "./execute.ts";
@@ -82,6 +83,7 @@ const mockSaveState = vi.mocked(saveState);
 const mockGetCurrentSha = vi.mocked(getCurrentSha);
 const mockComputeChangedFiles = vi.mocked(computeChangedFiles);
 const mockResetToSha = vi.mocked(resetToSha);
+const mockSquashTaskCommits = vi.mocked(squashTaskCommits);
 const mockParseReviewOutput = vi.mocked(parseReviewOutput);
 const mockHasCriticalFindings = vi.mocked(hasCriticalFindings);
 
@@ -149,6 +151,7 @@ function setupDefaultMocks() {
 		status: "pass",
 		findings: { passed: true, findings: [], mustFix: [], summary: "ok" },
 	});
+	mockSquashTaskCommits.mockResolvedValue({ sha: "squashed123", success: true });
 	mockGetConfig.mockReturnValue({ validationCommand: "", testCommand: "", validationCadence: "every", validationInterval: 3 } as any);
 	mockShouldRunValidation.mockReturnValue(false);
 	mockResolveFailureAction.mockImplementation((type) => {
@@ -506,6 +509,33 @@ describe("runExecutePhase", () => {
 			const result = await runExecutePhase(state, fakeCtx);
 
 			expect(result.phase).toBe("finalize");
+		});
+
+		it("squashes commits after task completion and stores commitSha", async () => {
+			setupDefaultMocks();
+			const state = makeState();
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(mockSquashTaskCommits).toHaveBeenCalledWith(
+				"/fake/project",
+				"abc123",  // gitShaBeforeImpl
+				1,         // task id
+				"Task 1",  // task title
+			);
+			expect(result.tasks[0].commitSha).toBe("squashed123");
+		});
+
+		it("warns but does not block when squash fails", async () => {
+			setupDefaultMocks();
+			mockSquashTaskCommits.mockResolvedValue({ sha: "", success: false, error: "squash error" });
+
+			const ctx = makeCtx();
+			const state = makeState();
+			const result = await runExecutePhase(state, ctx);
+
+			expect(result.tasks[0].status).toBe("complete");
+			expect(result.tasks[0].commitSha).toBeUndefined();
+			expect(ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("squash"), "warning");
 		});
 	});
 
