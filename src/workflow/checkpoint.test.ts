@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { evaluateCheckpointTriggers, formatCheckpointMessage, presentCheckpoint, type CheckpointTrigger } from "./checkpoint.js";
+import { evaluateCheckpointTriggers, formatCheckpointMessage, presentCheckpoint, applyPlanAdjustment, type CheckpointTrigger, type PlanAdjustment } from "./checkpoint.js";
 
 function makeState(overrides: any = {}): any {
   return {
@@ -201,5 +201,68 @@ describe("presentCheckpoint", () => {
       ui as any,
     );
     expect(result).toBe("continue");
+  });
+});
+
+describe("applyPlanAdjustment", () => {
+  function makeTasks(statuses: string[]) {
+    return statuses.map((s, i) => ({
+      id: i + 1,
+      title: `Task ${i + 1}`,
+      description: `Do task ${i + 1}`,
+      files: [`src/${i + 1}.ts`],
+      status: s,
+      reviewsPassed: [] as string[],
+      reviewsFailed: [] as string[],
+      fixAttempts: 0,
+    }));
+  }
+
+  it("drops tasks by ID — removes from array", () => {
+    const tasks = makeTasks(["complete", "pending", "pending", "pending"]);
+    const adj: PlanAdjustment = { droppedTaskIds: [3], skippedTaskIds: [], reorderedTaskIds: undefined };
+    const result = applyPlanAdjustment(tasks, adj);
+    expect(result.length).toBe(3);
+    expect(result.map(t => t.id)).toEqual([1, 2, 4]);
+  });
+
+  it("skips tasks by ID — sets status to skipped", () => {
+    const tasks = makeTasks(["complete", "pending", "pending", "pending"]);
+    const adj: PlanAdjustment = { droppedTaskIds: [], skippedTaskIds: [3], reorderedTaskIds: undefined };
+    const result = applyPlanAdjustment(tasks, adj);
+    expect(result.length).toBe(4);
+    expect(result.find(t => t.id === 3)!.status).toBe("skipped");
+  });
+
+  it("reorders remaining tasks by ID sequence", () => {
+    const tasks = makeTasks(["complete", "pending", "pending", "pending"]);
+    const adj: PlanAdjustment = { droppedTaskIds: [], skippedTaskIds: [], reorderedTaskIds: [1, 4, 2, 3] };
+    const result = applyPlanAdjustment(tasks, adj);
+    expect(result.map(t => t.id)).toEqual([1, 4, 2, 3]);
+  });
+
+  it("ignores drop/skip on completed tasks", () => {
+    const tasks = makeTasks(["complete", "pending", "pending"]);
+    const adj: PlanAdjustment = { droppedTaskIds: [1], skippedTaskIds: [], reorderedTaskIds: undefined };
+    const result = applyPlanAdjustment(tasks, adj);
+    // Task 1 is complete — should NOT be dropped
+    expect(result.map(t => t.id)).toContain(1);
+    expect(result.length).toBe(3);
+  });
+
+  it("handles combined drop + skip + reorder", () => {
+    const tasks = makeTasks(["complete", "pending", "pending", "pending", "pending"]);
+    const adj: PlanAdjustment = { droppedTaskIds: [4], skippedTaskIds: [3], reorderedTaskIds: [1, 5, 2, 3] };
+    const result = applyPlanAdjustment(tasks, adj);
+    expect(result.map(t => t.id)).toEqual([1, 5, 2, 3]);
+    expect(result.find(t => t.id === 3)!.status).toBe("skipped");
+    expect(result.find(t => t.id === 4)).toBeUndefined();
+  });
+
+  it("returns tasks unchanged when adjustment is empty", () => {
+    const tasks = makeTasks(["complete", "pending", "pending"]);
+    const adj: PlanAdjustment = { droppedTaskIds: [], skippedTaskIds: [], reorderedTaskIds: undefined };
+    const result = applyPlanAdjustment(tasks, adj);
+    expect(result.map(t => t.id)).toEqual([1, 2, 3]);
   });
 });

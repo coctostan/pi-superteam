@@ -107,3 +107,71 @@ export async function presentCheckpoint(
   if (choice === "Abort") return "abort";
   return "continue";
 }
+
+export interface PlanAdjustment {
+  droppedTaskIds: number[];
+  skippedTaskIds: number[];
+  reorderedTaskIds?: number[];
+}
+
+interface AdjustableTask {
+  id: number;
+  title: string;
+  description: string;
+  files: string[];
+  status: string;
+  reviewsPassed: string[];
+  reviewsFailed: string[];
+  fixAttempts: number;
+  [key: string]: any;
+}
+
+/**
+ * Apply plan adjustments to the task list.
+ * - Completed tasks are protected from drop/skip.
+ * - Dropped tasks are removed entirely.
+ * - Skipped tasks have status set to "skipped".
+ * - Reorder changes the array order.
+ * Returns a new array — does not mutate input.
+ */
+export function applyPlanAdjustment(
+  tasks: AdjustableTask[],
+  adjustment: PlanAdjustment,
+): AdjustableTask[] {
+  const completedStatuses = new Set(["complete", "skipped", "escalated"]);
+
+  // 1. Drop (only non-completed)
+  let result = tasks.filter(t => {
+    if (completedStatuses.has(t.status)) return true; // protect completed
+    return !adjustment.droppedTaskIds.includes(t.id);
+  });
+
+  // 2. Skip (only non-completed)
+  result = result.map(t => {
+    if (completedStatuses.has(t.status)) return t;
+    if (adjustment.skippedTaskIds.includes(t.id)) {
+      return { ...t, status: "skipped" };
+    }
+    return t;
+  });
+
+  // 3. Reorder (if provided)
+  if (adjustment.reorderedTaskIds && adjustment.reorderedTaskIds.length > 0) {
+    const byId = new Map(result.map(t => [t.id, t]));
+    const reordered: AdjustableTask[] = [];
+    for (const id of adjustment.reorderedTaskIds) {
+      const task = byId.get(id);
+      if (task) {
+        reordered.push(task);
+        byId.delete(id);
+      }
+    }
+    // Append any tasks not in the reorder list (shouldn't happen, but defensive)
+    for (const task of byId.values()) {
+      reordered.push(task);
+    }
+    result = reordered;
+  }
+
+  return result;
+}
