@@ -106,6 +106,8 @@ export type OrchestratorState = {
   pendingInteraction?: PendingInteraction;
   error?: string;
   testBaseline?: TestBaseline;
+  gitStartingSha?: string;
+  gitBranch?: string;
 };
 
 export function createInitialState(description: string): OrchestratorState {
