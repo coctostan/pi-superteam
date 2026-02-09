@@ -7,3 +7,4 @@ dist/
 .superteam.json
 .superteam-workflow.json
 *.tgz
+.worktrees/
