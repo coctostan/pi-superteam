@@ -62,6 +62,13 @@ vi.mock("../progress.js", () => ({
 	formatProgressSummary: vi.fn(),
 }));
 
+vi.mock("../checkpoint.js", () => ({
+	evaluateCheckpointTriggers: vi.fn(),
+	presentCheckpoint: vi.fn(),
+	presentPlanRevision: vi.fn(),
+	applyPlanAdjustment: vi.fn(),
+}));
+
 import { discoverAgents, dispatchAgent, dispatchParallel, getFinalOutput, checkCostBudget, hasWriteToolCalls } from "../../dispatch.ts";
 import { saveState } from "../orchestrator-state.ts";
 import { getCurrentSha, computeChangedFiles, resetToSha, squashTaskCommits } from "../git-utils.ts";
@@ -72,7 +79,13 @@ import { runCrossTaskValidation, shouldRunValidation } from "../cross-task-valid
 import { captureBaseline } from "../test-baseline.ts";
 import { resolveFailureAction } from "../failure-taxonomy.ts";
 import { computeProgressSummary, formatProgressSummary } from "../progress.ts";
+import { evaluateCheckpointTriggers, presentCheckpoint, presentPlanRevision, applyPlanAdjustment } from "../checkpoint.ts";
 import type { AgentProfile, DispatchResult, CostCheckResult } from "../../dispatch.ts";
+
+const mockEvaluateCheckpointTriggers = vi.mocked(evaluateCheckpointTriggers);
+const mockPresentCheckpoint = vi.mocked(presentCheckpoint);
+const mockPresentPlanRevision = vi.mocked(presentPlanRevision);
+const mockApplyPlanAdjustment = vi.mocked(applyPlanAdjustment);
 
 const mockRunCrossTaskValidation = vi.mocked(runCrossTaskValidation);
 const mockShouldRunValidation = vi.mocked(shouldRunValidation);
@@ -169,6 +182,7 @@ function setupDefaultMocks() {
 	mockFormatProgressSummary.mockReturnValue("Progress: 1 done, 0 remaining | Cost: $0.03");
 	mockGetConfig.mockReturnValue({ validationCommand: "", testCommand: "", validationCadence: "every", validationInterval: 3 } as any);
 	mockShouldRunValidation.mockReturnValue(false);
+	mockEvaluateCheckpointTriggers.mockReturnValue([]);
 	mockResolveFailureAction.mockImplementation((type) => {
 		const defaults: Record<string, string> = {
 			"test-regression": "stop-show-diff",
@@ -1447,6 +1461,119 @@ describe("runExecutePhase", () => {
 			expect(mockSquashTaskCommits).toHaveBeenCalled(); // squash
 			expect(mockComputeProgressSummary).toHaveBeenCalled(); // progress
 			expect(result.phase).toBe("finalize");
+		});
+	});
+
+	// --- Checkpoint integration ---
+
+	describe("checkpoint integration", () => {
+		it("does not pause when no checkpoint triggers fire", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([]);
+
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[0].status).toBe("complete");
+			expect(result.tasks[1].status).toBe("complete");
+			expect(mockPresentCheckpoint).not.toHaveBeenCalled();
+		});
+
+		it("presents checkpoint when budget-warning trigger fires", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "budget-warning", message: "Budget warning" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("continue");
+
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(mockPresentCheckpoint).toHaveBeenCalled();
+			expect(result.tasks[1].status).toBe("complete");
+		});
+
+		it("aborts workflow when user selects Abort at checkpoint", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "budget-critical", message: "Critical" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("abort");
+
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[0].status).toBe("complete");
+			expect(result.tasks[1].status).toBe("pending");
+			expect(result.error).toBe("Aborted at checkpoint");
+		});
+
+		it("enters plan revision when user selects Adjust at checkpoint", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "scheduled", message: "Scheduled" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("adjust");
+			mockPresentPlanRevision.mockResolvedValue({
+				droppedTaskIds: [],
+				skippedTaskIds: [2],
+				reorderedTaskIds: undefined,
+			});
+			mockApplyPlanAdjustment.mockImplementation((tasks, adj) => {
+				return tasks.map((t: any) =>
+					adj.skippedTaskIds.includes(t.id) ? { ...t, status: "skipped" } : t,
+				);
+			});
+
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(mockPresentPlanRevision).toHaveBeenCalled();
+			expect(result.tasks[1].status).toBe("skipped");
+		});
+
+		it("continues normally when plan revision returns null (cancelled)", async () => {
+			setupDefaultMocks();
+			mockEvaluateCheckpointTriggers.mockReturnValue([
+				{ type: "scheduled", message: "Scheduled" },
+			]);
+			mockPresentCheckpoint.mockResolvedValue("adjust");
+			mockPresentPlanRevision.mockResolvedValue(null);
+
+			const state = makeState({
+				tasks: [makeTask(), makeTask({ id: 2, title: "Task 2", status: "pending" })],
+			});
+			const result = await runExecutePhase(state, fakeCtx);
+
+			expect(result.tasks[1].status).toBe("complete");
+		});
+
+		it("calls evaluateCheckpointTriggers with costs from getConfig", async () => {
+			setupDefaultMocks();
+			mockGetConfig.mockReturnValue({
+				validationCommand: "",
+				testCommand: "",
+				validationCadence: "every",
+				validationInterval: 3,
+				costs: { warnAtUsd: 10, hardLimitUsd: 50 },
+			} as any);
+			mockEvaluateCheckpointTriggers.mockReturnValue([]);
+
+			const state = makeState();
+			await runExecutePhase(state, fakeCtx);
+
+			expect(mockEvaluateCheckpointTriggers).toHaveBeenCalledWith(
+				expect.any(Object),
+				{ warnAtUsd: 10, hardLimitUsd: 50 },
+			);
 		});
 	});
 

@@ -10,6 +10,7 @@ import { getConfig } from "../../config.js";
 import { runCrossTaskValidation, shouldRunValidation } from "../cross-task-validation.js";
 import { captureBaseline } from "../test-baseline.js";
 import { resolveFailureAction } from "../failure-taxonomy.js";
+import { evaluateCheckpointTriggers, presentCheckpoint, presentPlanRevision, applyPlanAdjustment } from "../checkpoint.js";
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -334,6 +335,45 @@ export async function runExecutePhase(
 
 		// Update progress widget
 		ui?.setWidget?.("workflow-progress", formatTaskProgress(state.tasks, i + 1));
+
+		// h1c. CHECKPOINT EVALUATION
+		{
+			const checkConfig = getConfig(ctx.cwd);
+			const costs = (checkConfig as any).costs || { warnAtUsd: 25, hardLimitUsd: 75 };
+			const triggers = evaluateCheckpointTriggers(state, costs);
+
+			if (triggers.length > 0 && ui?.select) {
+				const completedCount = state.tasks.filter(t => t.status === "complete").length;
+				const skippedCount = state.tasks.filter(t => t.status === "skipped").length;
+				const remainingCount = state.tasks.length - completedCount - skippedCount;
+				const avgCost = completedCount > 0 ? state.totalCostUsd / completedCount : 0;
+
+				const checkpointChoice = await presentCheckpoint(
+					triggers,
+					{
+						tasksCompleted: completedCount,
+						tasksTotal: state.tasks.length,
+						costUsd: state.totalCostUsd,
+						estimatedRemainingUsd: avgCost * remainingCount,
+					},
+					ui,
+				);
+
+				if (checkpointChoice === "abort") {
+					state.error = "Aborted at checkpoint";
+					saveState(state, ctx.cwd);
+					return state;
+				}
+
+				if (checkpointChoice === "adjust") {
+					const adjustment = await presentPlanRevision(state.tasks, ui);
+					if (adjustment) {
+						state.tasks = applyPlanAdjustment(state.tasks, adjustment) as TaskExecState[];
+						saveState(state, ctx.cwd);
+					}
+				}
+			}
+		}
 
 		// h2. CROSS-TASK VALIDATION
 		{
