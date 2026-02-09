@@ -68,3 +68,42 @@ export function evaluateCheckpointTriggers(
 
   return triggers;
 }
+
+export interface CheckpointStats {
+  tasksCompleted: number;
+  tasksTotal: number;
+  costUsd: number;
+  estimatedRemainingUsd: number;
+}
+
+/**
+ * Format the checkpoint message shown to the user.
+ * Pure function — returns a string.
+ */
+export function formatCheckpointMessage(
+  triggers: CheckpointTrigger[],
+  stats: CheckpointStats,
+): string {
+  const header = `Checkpoint: ${stats.tasksCompleted}/${stats.tasksTotal} tasks done | $${stats.costUsd.toFixed(2)} spent | ~$${stats.estimatedRemainingUsd.toFixed(2)} remaining`;
+
+  const triggerLines = triggers.map(t => `  • ${t.message}`).join("\n");
+
+  return `${header}\nTrigger:\n${triggerLines}`;
+}
+
+/**
+ * Present the checkpoint UI to the user. Returns user's choice.
+ */
+export async function presentCheckpoint(
+  triggers: CheckpointTrigger[],
+  stats: CheckpointStats,
+  ui: { select?: (prompt: string, options: string[]) => Promise<string | undefined> },
+): Promise<"continue" | "adjust" | "abort"> {
+  const message = formatCheckpointMessage(triggers, stats);
+
+  const choice = await ui.select?.(message, ["Continue", "Adjust plan", "Abort"]);
+
+  if (choice === "Adjust plan") return "adjust";
+  if (choice === "Abort") return "abort";
+  return "continue";
+}

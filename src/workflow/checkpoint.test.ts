@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { evaluateCheckpointTriggers, type CheckpointTrigger } from "./checkpoint.js";
+import { evaluateCheckpointTriggers, formatCheckpointMessage, presentCheckpoint, type CheckpointTrigger } from "./checkpoint.js";
 
 function makeState(overrides: any = {}): any {
   return {
@@ -134,5 +134,72 @@ describe("evaluateCheckpointTriggers", () => {
       hardLimitUsd: 75,
     });
     expect(triggers).toEqual([]);
+  });
+});
+
+describe("formatCheckpointMessage", () => {
+  it("formats single trigger with progress stats", () => {
+    const msg = formatCheckpointMessage(
+      [{ type: "budget-warning", message: "Budget warning: $26.00 spent" }],
+      { tasksCompleted: 5, tasksTotal: 20, costUsd: 26.0, estimatedRemainingUsd: 39.0 },
+    );
+    expect(msg).toContain("5/20");
+    expect(msg).toContain("$26.00");
+    expect(msg).toContain("$39.00");
+    expect(msg).toContain("Budget warning");
+  });
+
+  it("formats multiple triggers", () => {
+    const msg = formatCheckpointMessage(
+      [
+        { type: "budget-critical", message: "Budget critical" },
+        { type: "scheduled", message: "Scheduled" },
+      ],
+      { tasksCompleted: 10, tasksTotal: 15, costUsd: 68.0, estimatedRemainingUsd: 22.0 },
+    );
+    expect(msg).toContain("Budget critical");
+    expect(msg).toContain("Scheduled");
+  });
+});
+
+describe("presentCheckpoint", () => {
+  it("returns 'continue' when user selects Continue", async () => {
+    const ui = { select: async () => "Continue" };
+    const result = await presentCheckpoint(
+      [{ type: "scheduled", message: "Scheduled" }],
+      { tasksCompleted: 3, tasksTotal: 10, costUsd: 5.0, estimatedRemainingUsd: 12.0 },
+      ui as any,
+    );
+    expect(result).toBe("continue");
+  });
+
+  it("returns 'adjust' when user selects Adjust plan", async () => {
+    const ui = { select: async () => "Adjust plan" };
+    const result = await presentCheckpoint(
+      [{ type: "budget-warning", message: "Budget warning" }],
+      { tasksCompleted: 5, tasksTotal: 20, costUsd: 26.0, estimatedRemainingUsd: 39.0 },
+      ui as any,
+    );
+    expect(result).toBe("adjust");
+  });
+
+  it("returns 'abort' when user selects Abort", async () => {
+    const ui = { select: async () => "Abort" };
+    const result = await presentCheckpoint(
+      [{ type: "budget-critical", message: "Critical" }],
+      { tasksCompleted: 10, tasksTotal: 15, costUsd: 68.0, estimatedRemainingUsd: 22.0 },
+      ui as any,
+    );
+    expect(result).toBe("abort");
+  });
+
+  it("defaults to 'continue' when ui.select returns undefined", async () => {
+    const ui = { select: async () => undefined };
+    const result = await presentCheckpoint(
+      [{ type: "scheduled", message: "Scheduled" }],
+      { tasksCompleted: 1, tasksTotal: 5, costUsd: 1.0, estimatedRemainingUsd: 4.0 },
+      ui as any,
+    );
+    expect(result).toBe("continue");
   });
 });
