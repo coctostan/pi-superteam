@@ -707,6 +707,39 @@ describe("runBrainstormPhase", () => {
     expect(result.brainstorm.conversationLog!.some(e => e.step === "approaches")).toBe(true);
   });
 
+  it("triage with batches populates state.batches and continues with first batch", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("scout output");
+
+    mockParseBrainstorm
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "triage",
+          level: "complex",
+          reasoning: "Large scope, needs batching",
+          batches: [
+            { title: "Infrastructure", description: "Set up base types" },
+            { title: "Wiring", description: "Connect to orchestrator" },
+          ],
+        },
+      } as any);
+
+    ctx.ui.select.mockResolvedValueOnce("Agree — complex")
+      .mockResolvedValue(undefined); // cancel at questions
+
+    const state = makeState({ brainstorm: { step: "triage", scoutOutput: "data", conversationLog: [] } });
+    const result = await runBrainstormPhase(state, ctx);
+
+    expect(result.batches).toBeDefined();
+    expect(result.batches).toHaveLength(2);
+    expect(result.batches![0].status).toBe("active");
+    expect(result.batches![1].status).toBe("pending");
+    expect(result.currentBatchIndex).toBe(0);
+  });
+
   it("forwards onStreamEvent callback to dispatchAgent", async () => {
     const { runBrainstormPhase } = await import("./brainstorm.js");
     const ctx = makeCtx(tmpDir);

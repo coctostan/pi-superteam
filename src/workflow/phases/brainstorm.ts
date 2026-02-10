@@ -150,6 +150,16 @@ export async function runBrainstormPhase(
 			}
 		}
 
+		// Populate batches if triage suggested them
+		if (currentTriage.batches && currentTriage.batches.length > 0) {
+			state.batches = currentTriage.batches.map((b, i) => ({
+				title: b.title,
+				description: b.description,
+				status: i === 0 ? "active" as const : "pending" as const,
+			}));
+			state.currentBatchIndex = 0;
+		}
+
 		// Determine next step based on complexity
 		const level = state.brainstorm.complexityLevel!;
 		const skips = currentTriage.suggestedSkips || [];
