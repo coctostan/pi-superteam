@@ -707,6 +707,54 @@ describe("runBrainstormPhase", () => {
     expect(result.brainstorm.conversationLog!.some(e => e.step === "approaches")).toBe(true);
   });
 
+  it("triage with splits enqueues remaining and continues with first split", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const { peekQueue, clearQueue } = await import("../workflow-queue.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("scout output");
+
+    // Clear any existing queue
+    clearQueue(tmpDir);
+
+    mockParseBrainstorm
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "triage",
+          level: "exploration",
+          reasoning: "Two independent pieces",
+          splits: [
+            { title: "API endpoint", description: "New REST endpoint" },
+            { title: "CLI refactor", description: "Refactor CLI help" },
+          ],
+        },
+      } as any)
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "questions",
+          questions: [{ id: "q1", text: "Q?", type: "input" }],
+        },
+      } as any);
+
+    ctx.ui.select.mockResolvedValueOnce("Agree — exploration");
+    ctx.ui.input.mockResolvedValue(undefined); // cancel at questions
+
+    const state = makeState({ brainstorm: { step: "triage", scoutOutput: "data", conversationLog: [] } });
+    const result = await runBrainstormPhase(state, ctx);
+
+    // The remaining splits should be queued
+    const queued = peekQueue(tmpDir);
+    expect(queued).toHaveLength(1);
+    expect(queued[0].title).toBe("CLI refactor");
+    expect(queued[0].description).toBe("Refactor CLI help");
+
+    // Current workflow continues with first split's description
+    // (userDescription may be augmented)
+    clearQueue(tmpDir);
+  });
+
   it("triage with batches populates state.batches and continues with first batch", async () => {
     const { runBrainstormPhase } = await import("./brainstorm.js");
     const ctx = makeCtx(tmpDir);

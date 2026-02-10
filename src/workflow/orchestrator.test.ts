@@ -328,4 +328,39 @@ describe("runWorkflowLoop", () => {
       expect(result.currentBatchIndex).toBe(0);
     });
   });
+
+  describe("queue processing", () => {
+    it("offers to run queued workflows after completion", async () => {
+      const { runWorkflowLoop } = await import("./orchestrator.js");
+      const { enqueueWorkflow, clearQueue } = await import("./workflow-queue.js");
+      const ctx = makeCtx("/tmp/test-queue");
+
+      // Set up queue
+      const fs = await import("node:fs");
+      fs.mkdirSync("/tmp/test-queue", { recursive: true });
+      clearQueue("/tmp/test-queue");
+      enqueueWorkflow("/tmp/test-queue", { title: "Next task", description: "Do next thing" });
+
+      const state = {
+        phase: "finalize",
+        brainstorm: { step: "done" },
+        totalCostUsd: 0,
+        userDescription: "first task",
+        tasks: [],
+        currentTaskIndex: 0,
+        gitStartingSha: "abc",
+        gitBranch: "feat/test",
+      } as any;
+
+      mockFinalize.mockImplementation(async (s) => { return { state: s, report: "done" }; });
+      ctx.ui.select.mockResolvedValue("Stop");
+
+      const result = await runWorkflowLoop(state, ctx);
+      expect(result.phase).toBe("done");
+
+      // Clean up
+      clearQueue("/tmp/test-queue");
+      fs.rmSync("/tmp/test-queue", { recursive: true, force: true });
+    });
+  });
 });

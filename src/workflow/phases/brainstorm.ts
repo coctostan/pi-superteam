@@ -150,6 +150,23 @@ export async function runBrainstormPhase(
 			}
 		}
 
+		// Populate splits — enqueue remaining, continue with first
+		if (currentTriage.splits && currentTriage.splits.length > 1) {
+			const { enqueueWorkflow } = await import("../workflow-queue.js");
+			const scoutOutput = state.brainstorm.scoutOutput || "";
+			for (let s = 1; s < currentTriage.splits.length; s++) {
+				enqueueWorkflow(ctx.cwd, {
+					title: currentTriage.splits[s].title,
+					description: currentTriage.splits[s].description,
+					parentScoutOutput: scoutOutput,
+				});
+			}
+			ui?.notify?.(
+				`Split: ${currentTriage.splits.length} independent workflows. Running "${currentTriage.splits[0].title}" first, ${currentTriage.splits.length - 1} queued.`,
+				"info",
+			);
+		}
+
 		// Populate batches if triage suggested them
 		if (currentTriage.batches && currentTriage.batches.length > 0) {
 			state.batches = currentTriage.batches.map((b, i) => ({
