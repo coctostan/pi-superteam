@@ -131,6 +131,8 @@ describe("Brainstorm phase acceptance tests", () => {
     ctx.ui.select.mockResolvedValueOnce("Agree — exploration");
     // User answers the question
     ctx.ui.input.mockResolvedValueOnce("OAuth2");
+    // Proceed after questions
+    ctx.ui.select.mockResolvedValueOnce("Proceed");
     // User picks the approach
     ctx.ui.select.mockResolvedValueOnce("Approach A");
     // User approves the design section

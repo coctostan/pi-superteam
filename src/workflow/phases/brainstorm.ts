@@ -181,26 +181,65 @@ export async function runBrainstormPhase(
 			return state;
 		}
 
-		const questions = questionsResult.data.questions || [];
-		state.brainstorm.questions = questions;
+		let currentQuestions = questionsResult.data.questions || [];
+		state.brainstorm.questions = currentQuestions;
+		appendLog(state, "brainstormer", "questions", currentQuestions.map((q) => q.text).join("; "));
 
-		// Present each question to user
-		for (let i = 0; i < questions.length; i++) {
-			const q = questions[i];
-			let answer: string | undefined;
+		// Question-answer-discuss loop
+		while (true) {
+			// Present each question to user
+			for (let i = 0; i < currentQuestions.length; i++) {
+				const q = currentQuestions[i];
+				let answer: string | undefined;
 
-			if (q.type === "choice" && q.options && q.options.length > 0) {
-				answer = await ui?.select?.(q.text, q.options);
-			} else {
-				answer = await ui?.input?.(q.text);
+				if (q.type === "choice" && q.options && q.options.length > 0) {
+					answer = await ui?.select?.(q.text, q.options);
+				} else {
+					answer = await ui?.input?.(q.text);
+				}
+
+				if (answer === undefined) {
+					return state;
+				}
+
+				currentQuestions[i].answer = answer;
 			}
 
-			if (answer === undefined) {
-				// User cancelled
-				return state;
+			// Offer discuss/proceed
+			const choice = await ui?.select?.("Questions answered", ["Proceed", "Discuss"]);
+			if (choice === undefined) return state;
+
+			if (choice === "Proceed") break;
+
+			if (choice === "Discuss") {
+				const comment = await ui?.input?.("Your thoughts on these questions:");
+				if (comment === undefined) return state;
+				appendLog(state, "user", "questions", comment);
+
+				const revisedResult = await dispatchBrainstormerWithRetry(
+					brainstormerAgent,
+					buildBrainstormConversationalPrompt(
+						{
+							scoutOutput: state.brainstorm.scoutOutput || "",
+							userDescription: state.userDescription,
+							step: "questions",
+							conversationLog: state.brainstorm.conversationLog,
+						},
+						comment,
+					),
+					ctx.cwd, state, signal, ui, makeOnStreamEvent,
+				);
+				if (!revisedResult) return state;
+
+				if (revisedResult.data.type === "questions") {
+					currentQuestions = revisedResult.data.questions || [];
+					state.brainstorm.questions = currentQuestions;
+					appendLog(state, "brainstormer", "questions", currentQuestions.map((q) => q.text).join("; "));
+				}
+				continue;
 			}
 
-			questions[i].answer = answer;
+			break;
 		}
 
 		state.brainstorm.step = "approaches";

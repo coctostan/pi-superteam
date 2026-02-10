@@ -147,9 +147,12 @@ describe("runBrainstormPhase", () => {
         },
       } as any);
 
-    ctx.ui.select.mockResolvedValueOnce("OAuth");     // q1 choice
+    ctx.ui.select
+      .mockResolvedValueOnce("OAuth")        // q1 choice
+      .mockResolvedValueOnce("Proceed")      // after questions
+      .mockResolvedValueOnce("Approach A")   // approach selection
+      .mockResolvedValue(undefined);         // cancel
     ctx.ui.input.mockResolvedValueOnce("100ms");       // q2 input
-    ctx.ui.select.mockResolvedValueOnce("Approach A"); // approach selection
     ctx.ui.confirm.mockResolvedValue(undefined);       // cancel at design step
 
     const result = await runBrainstormPhase(state, ctx);
@@ -402,6 +405,100 @@ describe("runBrainstormPhase", () => {
 
     expect(result.brainstorm.step).toBe("done");
     expect(result.phase).toBe("plan-write");
+  });
+
+  it("questions step offers discuss/proceed menu after answering", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("output");
+
+    mockParseBrainstorm
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "questions",
+          questions: [{ id: "q1", text: "What framework?", type: "input" }],
+        },
+      } as any)
+      // Revised questions after discussion
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "questions",
+          questions: [
+            { id: "q1", text: "What framework?", type: "input" },
+            { id: "q2", text: "What about testing?", type: "input" },
+          ],
+        },
+      } as any)
+      // Approaches after proceed
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "approaches",
+          approaches: [{ id: "a1", title: "App A", summary: "S", tradeoffs: "T", taskEstimate: 2 }],
+          recommendation: "a1",
+          reasoning: "Best",
+        },
+      } as any);
+
+    ctx.ui.input
+      .mockResolvedValueOnce("React")         // q1 answer first round
+      .mockResolvedValueOnce("We also need testing") // discussion comment
+      .mockResolvedValueOnce("React")         // q1 answer second round
+      .mockResolvedValueOnce("Jest");         // q2 answer second round
+    ctx.ui.select
+      .mockResolvedValueOnce("Discuss")       // after first round questions
+      .mockResolvedValueOnce("Proceed")       // after second round questions
+      .mockResolvedValueOnce("App A")         // approach selection
+      .mockResolvedValue(undefined);          // cancel at design
+
+    const state = makeState({
+      brainstorm: { step: "questions", scoutOutput: "scout data", conversationLog: [], complexityLevel: "exploration" },
+    });
+    const result = await runBrainstormPhase(state, ctx);
+
+    expect(result.brainstorm.questions).toHaveLength(2);
+    expect(result.brainstorm.conversationLog!.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("questions step proceeds to approaches when user selects 'Proceed'", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("output");
+
+    mockParseBrainstorm
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "questions",
+          questions: [{ id: "q1", text: "How?", type: "input" }],
+        },
+      } as any)
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "approaches",
+          approaches: [{ id: "a1", title: "App A", summary: "S", tradeoffs: "T", taskEstimate: 2 }],
+          recommendation: "a1",
+          reasoning: "Best",
+        },
+      } as any);
+
+    ctx.ui.input.mockResolvedValueOnce("Answer");
+    ctx.ui.select
+      .mockResolvedValueOnce("Proceed")   // after questions
+      .mockResolvedValueOnce("App A")     // approach selection
+      .mockResolvedValue(undefined);      // cancel
+
+    const state = makeState({
+      brainstorm: { step: "questions", scoutOutput: "scout data", conversationLog: [], complexityLevel: "exploration" },
+    });
+    const result = await runBrainstormPhase(state, ctx);
+
+    expect(result.brainstorm.chosenApproach).toBe("a1");
   });
 
   it("triage discuss round re-dispatches brainstormer and re-presents", async () => {
