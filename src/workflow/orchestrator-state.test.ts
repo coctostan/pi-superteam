@@ -307,6 +307,33 @@ describe("orchestrator-state", () => {
     });
   });
 
+  describe("batch state fields", () => {
+    it("OrchestratorState accepts batches and currentBatchIndex", () => {
+      const state = createInitialState("test");
+      (state as any).batches = [
+        { title: "Batch 1", description: "Infrastructure", status: "pending" },
+        { title: "Batch 2", description: "Wiring", status: "pending" },
+      ];
+      (state as any).currentBatchIndex = 0;
+      expect((state as any).batches).toHaveLength(2);
+      expect((state as any).currentBatchIndex).toBe(0);
+    });
+
+    it("batches round-trip through save/load", () => {
+      const state = createInitialState("test");
+      (state as any).batches = [
+        { title: "B1", description: "D1", status: "complete" },
+        { title: "B2", description: "D2", status: "pending" },
+      ];
+      (state as any).currentBatchIndex = 1;
+      saveState(state, tmpDir);
+      const loaded = loadState(tmpDir);
+      expect((loaded as any).batches).toHaveLength(2);
+      expect((loaded as any).batches[0].status).toBe("complete");
+      expect((loaded as any).currentBatchIndex).toBe(1);
+    });
+  });
+
   describe("updated state model", () => {
     it("createInitialState starts in brainstorm phase", () => {
       const state = createInitialState("Build auth");

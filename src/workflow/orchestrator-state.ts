@@ -49,6 +49,12 @@ export type BrainstormState = {
   complexityLevel?: "straightforward" | "exploration" | "complex";
 };
 
+export type BatchState = {
+  title: string;
+  description: string;
+  status: "pending" | "active" | "complete";
+};
+
 export type OrchestratorPhase =
   | "brainstorm"
   | "plan-write"
@@ -104,6 +110,8 @@ export type OrchestratorState = {
   brainstorm: BrainstormState;
   designPath?: string;
   designContent?: string;
+  batches?: BatchState[];
+  currentBatchIndex?: number;
   planPath?: string;
   planContent?: string;
   tasks: TaskExecState[];
