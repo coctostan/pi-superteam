@@ -18,6 +18,7 @@ import {
 	buildBrainstormSectionRevisionPrompt,
 	buildTargetedPlanRevisionPrompt,
 	buildBrainstormConversationalPrompt,
+	buildBrainstormTriagePrompt,
 } from "./prompt-builder.ts";
 import type { TaskExecState, BrainstormQuestion, BrainstormApproach, DesignSection, ConversationEntry } from "./orchestrator-state.ts";
 import type { ReviewFindings } from "../review-parser.ts";
@@ -581,6 +582,41 @@ describe("buildBrainstormConversationalPrompt", () => {
 
 	it("includes literal newline warning", () => {
 		const result = buildBrainstormConversationalPrompt(baseState, "comment");
+		expect(result.toLowerCase()).toContain("never use literal newlines inside string values");
+	});
+});
+
+describe("buildBrainstormTriagePrompt", () => {
+	it("includes scout output", () => {
+		const result = buildBrainstormTriagePrompt("Scout: TS project, 42 files", "Add ANSI stripping");
+		expect(result).toContain("Scout: TS project, 42 files");
+	});
+
+	it("includes user description", () => {
+		const result = buildBrainstormTriagePrompt("scout data", "Add user authentication");
+		expect(result).toContain("Add user authentication");
+	});
+
+	it("instructs to return triage type", () => {
+		const result = buildBrainstormTriagePrompt("scout", "desc");
+		expect(result).toContain("triage");
+	});
+
+	it("describes all three complexity levels", () => {
+		const result = buildBrainstormTriagePrompt("scout", "desc");
+		expect(result.toLowerCase()).toContain("straightforward");
+		expect(result.toLowerCase()).toContain("exploration");
+		expect(result.toLowerCase()).toContain("complex");
+	});
+
+	it("mentions batches and splits", () => {
+		const result = buildBrainstormTriagePrompt("scout", "desc");
+		expect(result.toLowerCase()).toContain("batch");
+		expect(result.toLowerCase()).toContain("split");
+	});
+
+	it("includes literal newline warning", () => {
+		const result = buildBrainstormTriagePrompt("scout", "desc");
 		expect(result.toLowerCase()).toContain("never use literal newlines inside string values");
 	});
 });

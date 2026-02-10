@@ -386,6 +386,41 @@ export function buildTargetedPlanRevisionPrompt(
 	].join("\n");
 }
 
+// --- Brainstorm triage ---
+
+export function buildBrainstormTriagePrompt(scoutOutput: string, userDescription: string): string {
+	return [
+		`## Task: Assess complexity and scope`,
+		``,
+		`The user wants: ${userDescription}`,
+		``,
+		`## Project context (from scout)`,
+		scoutOutput,
+		``,
+		`## Instructions`,
+		`Assess this change request and classify its complexity:`,
+		``,
+		`- **straightforward** — Focused change, clear path, no design choices. Skip questions and approaches.`,
+		`- **exploration** — Meaningful design choices exist. Normal brainstorm flow.`,
+		`- **complex** — Multiple systems, competing tradeoffs. Deeper exploration with more questions.`,
+		``,
+		`If the scope is broad but cohesive, propose **batches** — sequential chunks that each get their own plan-execute cycle.`,
+		`If the scope contains genuinely independent pieces, propose **splits** — separate workflow runs.`,
+		``,
+		`Return a \`\`\`superteam-brainstorm block with type "triage":`,
+		`{`,
+		`  "type": "triage",`,
+		`  "level": "straightforward" | "exploration" | "complex",`,
+		`  "reasoning": "Why this level",`,
+		`  "suggestedSkips": ["questions", "approaches"],  // optional, for straightforward`,
+		`  "batches": [{"title": "...", "description": "..."}],  // optional, for broad scope`,
+		`  "splits": [{"title": "...", "description": "..."}]    // optional, for independent pieces`,
+		`}`,
+		``,
+		`IMPORTANT: In your JSON output, never use literal newlines inside string values. Use \\n escape sequences instead.`,
+	].join("\n");
+}
+
 // --- Brainstorm conversational ---
 
 const CONVERSATION_WORD_CAP = 3000;
