@@ -533,6 +533,96 @@ describe("runBrainstormPhase", () => {
     expect(result.brainstorm.conversationLog!.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("approaches step allows discuss and go-back to questions", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("output");
+
+    const state = makeState({
+      brainstorm: {
+        step: "approaches",
+        scoutOutput: "scout data",
+        complexityLevel: "exploration",
+        conversationLog: [],
+        questions: [{ id: "q1", text: "What DB?", type: "input", answer: "Postgres" }],
+      },
+    });
+
+    mockParseBrainstorm
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "approaches",
+          approaches: [
+            { id: "a1", title: "Approach A", summary: "SA", tradeoffs: "TA", taskEstimate: 3 },
+            { id: "a2", title: "Approach B", summary: "SB", tradeoffs: "TB", taskEstimate: 5 },
+          ],
+          recommendation: "a1",
+        },
+      } as any);
+
+    // User goes back to questions
+    ctx.ui.select.mockResolvedValueOnce("Go back to questions");
+
+    const result = await runBrainstormPhase(state, ctx);
+
+    expect(result.brainstorm.step).toBe("questions");
+    // Existing question answer should be preserved
+    expect(result.brainstorm.questions![0].answer).toBe("Postgres");
+  });
+
+  it("approaches discuss round revises approaches", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("output");
+
+    const state = makeState({
+      brainstorm: {
+        step: "approaches",
+        scoutOutput: "scout data",
+        complexityLevel: "exploration",
+        conversationLog: [],
+        questions: [{ id: "q1", text: "Q?", type: "input", answer: "A" }],
+      },
+    });
+
+    mockParseBrainstorm
+      // Initial approaches
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "approaches",
+          approaches: [{ id: "a1", title: "Approach A", summary: "SA", tradeoffs: "TA", taskEstimate: 3 }],
+          recommendation: "a1",
+        },
+      } as any)
+      // Revised approaches
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "approaches",
+          approaches: [
+            { id: "a1", title: "Approach A (revised)", summary: "SA+", tradeoffs: "TA+", taskEstimate: 4 },
+            { id: "a3", title: "Approach C", summary: "SC", tradeoffs: "TC", taskEstimate: 2 },
+          ],
+          recommendation: "a3",
+        },
+      } as any);
+
+    ctx.ui.select
+      .mockResolvedValueOnce("Discuss")            // discuss approaches
+      .mockResolvedValueOnce("Approach C")         // pick revised approach
+      .mockResolvedValue(undefined);               // cancel at design
+    ctx.ui.input.mockResolvedValueOnce("What about a hybrid approach?");  // discussion comment
+
+    const result = await runBrainstormPhase(state, ctx);
+
+    expect(result.brainstorm.chosenApproach).toBe("a3");
+    expect(result.brainstorm.conversationLog!.some(e => e.step === "approaches")).toBe(true);
+  });
+
   it("forwards onStreamEvent callback to dispatchAgent", async () => {
     const { runBrainstormPhase } = await import("./brainstorm.js");
     const ctx = makeCtx(tmpDir);

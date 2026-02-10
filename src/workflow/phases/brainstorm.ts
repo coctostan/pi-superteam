@@ -263,21 +263,71 @@ export async function runBrainstormPhase(
 			return state;
 		}
 
-		const approaches = approachResult.data.approaches || [];
+		let approaches = approachResult.data.approaches || [];
 		state.brainstorm.approaches = approaches;
 		state.brainstorm.recommendation = approachResult.data.recommendation;
+		appendLog(state, "brainstormer", "approaches",
+			`Proposed ${approaches.length} approaches, recommends ${state.brainstorm.recommendation || "none"}`);
 
-		// Present approaches to user
-		const approachTitles = approaches.map((a) => a.title);
-		const chosen = await ui?.select?.("Choose an approach", approachTitles);
+		// Interactive approach menu
+		while (true) {
+			const rec = state.brainstorm.recommendation;
+			const options = [
+				...approaches.map((a) => {
+					const marker = a.id === rec ? " ★" : "";
+					return `${a.title}${marker}`;
+				}),
+				"Discuss",
+				"Go back to questions",
+			];
 
-		if (chosen === undefined) {
-			return state; // cancelled
+			const choice = await ui?.select?.("Choose an approach", options);
+			if (choice === undefined) return state;
+
+			if (choice === "Go back to questions") {
+				state.brainstorm.step = "questions";
+				state.brainstorm.approaches = [];
+				return state;
+			}
+
+			if (choice === "Discuss") {
+				const comment = await ui?.input?.("Your thoughts on these approaches:");
+				if (comment === undefined) return state;
+				appendLog(state, "user", "approaches", comment);
+
+				const revisedResult = await dispatchBrainstormerWithRetry(
+					brainstormerAgent,
+					buildBrainstormConversationalPrompt(
+						{
+							scoutOutput,
+							userDescription: state.userDescription,
+							step: "approaches",
+							conversationLog: state.brainstorm.conversationLog,
+							questions: qa,
+						},
+						comment,
+					),
+					ctx.cwd, state, signal, ui, makeOnStreamEvent,
+				);
+				if (!revisedResult) return state;
+
+				if (revisedResult.data.type === "approaches") {
+					approaches = revisedResult.data.approaches || [];
+					state.brainstorm.approaches = approaches;
+					state.brainstorm.recommendation = revisedResult.data.recommendation;
+					appendLog(state, "brainstormer", "approaches",
+						`Revised to ${approaches.length} approaches`);
+				}
+				continue;
+			}
+
+			// User picked an approach
+			const chosenTitle = choice.replace(/ ★$/, "");
+			const chosenApproach = approaches.find((a) => a.title === chosenTitle);
+			state.brainstorm.chosenApproach = chosenApproach?.id || approaches[0]?.id;
+			state.brainstorm.step = "design";
+			break;
 		}
-
-		const chosenApproach = approaches.find((a) => a.title === chosen);
-		state.brainstorm.chosenApproach = chosenApproach?.id || approaches[0]?.id;
-		state.brainstorm.step = "design";
 	}
 
 	// Sub-step: design
