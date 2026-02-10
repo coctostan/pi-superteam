@@ -1,5 +1,5 @@
 // src/workflow/phases/brainstorm.acceptance.test.ts
-// Acceptance tests for Bug 3 (status bar never updates) and Bug 4 (confirm dialog "undefined")
+// Acceptance tests for status bar updates, confirm dialog, and triage integration
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -87,15 +87,20 @@ describe("Brainstorm phase acceptance tests", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("AT-7: setStatus is called with strings containing each sub-step name (scout, questions, approaches, design)", async () => {
+  it("AT-7: setStatus is called with strings containing each sub-step name (scout, triage, questions, approaches, design)", async () => {
     const { runBrainstormPhase } = await import("./brainstorm.js");
     const ctx = makeCtx(tmpDir);
 
     mockDispatchAgent.mockResolvedValue(makeDispatchResult());
     mockGetFinalOutput.mockReturnValue("scout output");
 
-    // Parse calls return questions, then approaches, then design — in order
     mockParseBrainstorm
+      // Triage response
+      .mockReturnValueOnce({
+        status: "ok",
+        data: { type: "triage", level: "exploration", reasoning: "Design choices exist" },
+      } as any)
+      // Questions response
       .mockReturnValueOnce({
         status: "ok",
         data: {
@@ -103,6 +108,7 @@ describe("Brainstorm phase acceptance tests", () => {
           questions: [{ id: "q1", text: "What auth provider?", type: "input" }],
         },
       } as any)
+      // Approaches response
       .mockReturnValueOnce({
         status: "ok",
         data: {
@@ -112,6 +118,7 @@ describe("Brainstorm phase acceptance tests", () => {
           reasoning: "Best",
         },
       } as any)
+      // Design response
       .mockReturnValueOnce({
         status: "ok",
         data: {
@@ -120,8 +127,8 @@ describe("Brainstorm phase acceptance tests", () => {
         },
       } as any);
 
-    // User chooses to start brainstorm (skip prompt)
-    ctx.ui.select.mockResolvedValueOnce("Start brainstorm");
+    // Triage: agree with exploration
+    ctx.ui.select.mockResolvedValueOnce("Agree — exploration");
     // User answers the question
     ctx.ui.input.mockResolvedValueOnce("OAuth2");
     // User picks the approach
@@ -132,11 +139,11 @@ describe("Brainstorm phase acceptance tests", () => {
     const state = makeState({ brainstorm: { step: "scout" } });
     await runBrainstormPhase(state, ctx);
 
-    // Collect all status strings
     const statusCalls = ctx.ui.setStatus.mock.calls.map((c: any[]) => c.join(" ").toLowerCase());
     const allStatusText = statusCalls.join(" ");
 
     expect(allStatusText).toContain("scout");
+    expect(allStatusText).toContain("triage");
     expect(allStatusText).toContain("questions");
     expect(allStatusText).toContain("approach");
     expect(allStatusText).toContain("design");
@@ -166,19 +173,18 @@ describe("Brainstorm phase acceptance tests", () => {
         questions: [{ id: "q1", text: "Q?", type: "input", answer: "A" }],
         chosenApproach: "a1",
         approaches: [{ id: "a1", title: "Approach A", summary: "S", tradeoffs: "T", taskEstimate: 3 }],
+        conversationLog: [],
+        complexityLevel: "exploration",
       },
     });
 
     await runBrainstormPhase(state, ctx);
 
-    // ui.confirm must have been called
     expect(ctx.ui.confirm).toHaveBeenCalled();
 
     const firstCall = ctx.ui.confirm.mock.calls[0];
-
-    // confirm should be called with at least 2 arguments: title and body
     expect(firstCall.length).toBeGreaterThanOrEqual(2);
-    expect(firstCall[0]).toBeTruthy(); // non-empty title
+    expect(firstCall[0]).toBeTruthy();
     expect(firstCall[1]).toBeDefined();
     expect(String(firstCall[1])).not.toBe("undefined");
   });
@@ -207,6 +213,8 @@ describe("Brainstorm phase acceptance tests", () => {
         questions: [{ id: "q1", text: "Q?", type: "input", answer: "A" }],
         chosenApproach: "a1",
         approaches: [{ id: "a1", title: "Approach A", summary: "S", tradeoffs: "T", taskEstimate: 3 }],
+        conversationLog: [],
+        complexityLevel: "exploration",
       },
     });
 
@@ -217,10 +225,7 @@ describe("Brainstorm phase acceptance tests", () => {
     const firstCall = ctx.ui.confirm.mock.calls[0];
     const allArgs = firstCall.map(String).join(" ");
 
-    // Must not contain the literal string "undefined"
     expect(allArgs).not.toContain("undefined");
-
-    // Must contain fallback text for missing title and content
     expect(allArgs).toMatch(/\(untitled\)/i);
     expect(allArgs).toMatch(/\(no content\)/i);
   });
