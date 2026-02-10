@@ -16,6 +16,41 @@ describe("formatStatus", () => {
     expect(status).toContain("$0.42");
   });
 
+  it("shows triage sub-step in brainstorm phase", () => {
+    const state = { phase: "brainstorm", brainstorm: { step: "triage" }, totalCostUsd: 0, tasks: [], currentTaskIndex: 0 } as any;
+    const status = formatStatus(state);
+    expect(status).toContain("triage");
+  });
+
+  it("shows batch info when batches exist", () => {
+    const state = {
+      phase: "execute",
+      tasks: [{ status: "implementing" }],
+      currentTaskIndex: 0,
+      totalCostUsd: 1.5,
+      batches: [
+        { title: "Batch 1", status: "complete" },
+        { title: "Batch 2", status: "active" },
+        { title: "Batch 3", status: "pending" },
+      ],
+      currentBatchIndex: 1,
+    } as any;
+    const status = formatStatus(state);
+    expect(status).toContain("batch 2/3");
+  });
+
+  it("shows complexity level when set", () => {
+    const state = {
+      phase: "brainstorm",
+      brainstorm: { step: "questions", complexityLevel: "complex" },
+      totalCostUsd: 0,
+      tasks: [],
+      currentTaskIndex: 0,
+    } as any;
+    const status = formatStatus(state);
+    expect(status.toLowerCase()).toContain("complex");
+  });
+
   it("formats execute phase with task progress", () => {
     const state = {
       phase: "execute",
