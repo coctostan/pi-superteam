@@ -151,9 +151,8 @@ describe("runBrainstormPhase", () => {
       .mockResolvedValueOnce("OAuth")        // q1 choice
       .mockResolvedValueOnce("Proceed")      // after questions
       .mockResolvedValueOnce("Approach A")   // approach selection
-      .mockResolvedValue(undefined);         // cancel
+      .mockResolvedValue(undefined);         // cancel at design
     ctx.ui.input.mockResolvedValueOnce("100ms");       // q2 input
-    ctx.ui.confirm.mockResolvedValue(undefined);       // cancel at design step
 
     const result = await runBrainstormPhase(state, ctx);
 
@@ -175,6 +174,8 @@ describe("runBrainstormPhase", () => {
         questions: [{ id: "q1", text: "Q?", type: "input", answer: "A" }],
         chosenApproach: "a1",
         approaches: [{ id: "a1", title: "Approach A", summary: "S", tradeoffs: "T", taskEstimate: 3 }],
+        conversationLog: [],
+        complexityLevel: "exploration",
       },
     });
 
@@ -189,7 +190,7 @@ describe("runBrainstormPhase", () => {
       },
     } as any);
 
-    ctx.ui.confirm.mockResolvedValue(true); // approve both sections
+    ctx.ui.select.mockResolvedValue("Approve"); // approve both sections
 
     const result = await runBrainstormPhase(state, ctx);
 
@@ -214,6 +215,8 @@ describe("runBrainstormPhase", () => {
         questions: [{ id: "q1", text: "Q?", type: "input", answer: "A" }],
         chosenApproach: "a1",
         approaches: [{ id: "a1", title: "Approach A", summary: "S", tradeoffs: "T", taskEstimate: 3 }],
+        conversationLog: [],
+        complexityLevel: "exploration",
       },
     });
 
@@ -238,9 +241,9 @@ describe("runBrainstormPhase", () => {
         },
       } as any);
 
-    ctx.ui.confirm
-      .mockResolvedValueOnce(false)  // reject first version
-      .mockResolvedValueOnce(true);  // approve revision
+    ctx.ui.select
+      .mockResolvedValueOnce("Revise")  // revise first version
+      .mockResolvedValueOnce("Approve"); // approve revision
     ctx.ui.input.mockResolvedValueOnce("Add more detail about error handling");
 
     const result = await runBrainstormPhase(state, ctx);
@@ -375,8 +378,9 @@ describe("runBrainstormPhase", () => {
         },
       } as any);
 
-    ctx.ui.select.mockResolvedValueOnce("Agree — straightforward"); // triage accept
-    ctx.ui.confirm.mockResolvedValueOnce(true); // approve design section
+    ctx.ui.select
+      .mockResolvedValueOnce("Agree — straightforward") // triage accept
+      .mockResolvedValueOnce("Approve"); // approve design section
     
     const state = makeState();
     const result = await runBrainstormPhase(state, ctx);
@@ -570,6 +574,86 @@ describe("runBrainstormPhase", () => {
     expect(result.brainstorm.step).toBe("questions");
     // Existing question answer should be preserved
     expect(result.brainstorm.questions![0].answer).toBe("Postgres");
+  });
+
+  it("design step allows go back to approaches", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("output");
+
+    const state = makeState({
+      brainstorm: {
+        step: "design",
+        scoutOutput: "scout data",
+        complexityLevel: "exploration",
+        conversationLog: [],
+        questions: [{ id: "q1", text: "Q?", type: "input", answer: "A" }],
+        chosenApproach: "a1",
+        approaches: [{ id: "a1", title: "Approach A", summary: "S", tradeoffs: "T", taskEstimate: 3 }],
+      },
+    });
+
+    mockParseBrainstorm.mockReturnValueOnce({
+      status: "ok",
+      data: {
+        type: "design",
+        sections: [{ id: "s1", title: "Arch", content: "Content..." }],
+      },
+    } as any);
+
+    ctx.ui.select.mockResolvedValueOnce("Go back to approaches");
+
+    const result = await runBrainstormPhase(state, ctx);
+
+    expect(result.brainstorm.step).toBe("approaches");
+    expect(result.brainstorm.questions![0].answer).toBe("A");
+  });
+
+  it("design step allows discuss before approving", async () => {
+    const { runBrainstormPhase } = await import("./brainstorm.js");
+    const ctx = makeCtx(tmpDir);
+    mockDispatchAgent.mockResolvedValue(makeDispatchResult());
+    mockGetFinalOutput.mockReturnValue("output");
+
+    const state = makeState({
+      brainstorm: {
+        step: "design",
+        scoutOutput: "scout data",
+        complexityLevel: "exploration",
+        conversationLog: [],
+        questions: [{ id: "q1", text: "Q?", type: "input", answer: "A" }],
+        chosenApproach: "a1",
+        approaches: [{ id: "a1", title: "Approach A", summary: "S", tradeoffs: "T", taskEstimate: 3 }],
+      },
+    });
+
+    mockParseBrainstorm
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "design",
+          sections: [{ id: "s1", title: "Architecture", content: "Initial design..." }],
+        },
+      } as any)
+      // Discuss revision
+      .mockReturnValueOnce({
+        status: "ok",
+        data: {
+          type: "design",
+          sections: [{ id: "s1", title: "Architecture", content: "Discussed and revised..." }],
+        },
+      } as any);
+
+    ctx.ui.select
+      .mockResolvedValueOnce("Discuss")     // discuss section
+      .mockResolvedValueOnce("Approve");    // approve after discussion
+    ctx.ui.input.mockResolvedValueOnce("What about caching?");  // discussion comment
+
+    const result = await runBrainstormPhase(state, ctx);
+
+    expect(result.brainstorm.step).toBe("done");
+    expect(result.designContent).toContain("Discussed and revised");
   });
 
   it("approaches discuss round revises approaches", async () => {

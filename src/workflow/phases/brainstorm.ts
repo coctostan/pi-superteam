@@ -362,20 +362,72 @@ export async function runBrainstormPhase(
 		}
 
 		let sections = designResult.data.sections || [];
+		appendLog(state, "brainstormer", "design", `Generated ${sections.length} design sections`);
 
-		// Present each section for approval
-		for (let i = 0; i < sections.length; i++) {
+		// Present each section with menu
+		let i = 0;
+		while (i < sections.length) {
 			const section = sections[i];
 			const title = section.title || "(untitled)";
-			const message = section.content || "(no content)";
-			const approved = await ui?.confirm?.(title, message);
+			const content = section.content || "(no content)";
 
-			if (approved === undefined) {
-				return state; // cancelled
+			const menuOptions = ["Approve", "Revise", "Discuss"];
+			if (i > 0) menuOptions.push("Go back to previous section");
+			menuOptions.push("Go back to approaches");
+
+			ui?.notify?.(`## ${title}\n\n${content}`, "info");
+
+			const choice = await ui?.select?.(title, menuOptions);
+			if (choice === undefined) return state;
+
+			if (choice === "Approve") {
+				i++;
+				continue;
 			}
 
-			if (!approved) {
-				// Get feedback and dispatch revision
+			if (choice === "Go back to previous section") {
+				i = Math.max(0, i - 1);
+				continue;
+			}
+
+			if (choice === "Go back to approaches") {
+				state.brainstorm.step = "approaches";
+				state.brainstorm.approaches = [];
+				state.brainstorm.designSections = [];
+				return state;
+			}
+
+			if (choice === "Discuss") {
+				const comment = await ui?.input?.("Your thoughts on this section:");
+				if (comment === undefined) return state;
+				appendLog(state, "user", "design", `[${title}] ${comment}`);
+
+				const revisedResult = await dispatchBrainstormerWithRetry(
+					brainstormerAgent,
+					buildBrainstormConversationalPrompt(
+						{
+							scoutOutput,
+							userDescription: state.userDescription,
+							step: "design",
+							conversationLog: state.brainstorm.conversationLog,
+							questions: qa,
+							approaches,
+							chosenApproach: chosenId,
+						},
+						`Regarding section "${title}": ${comment}`,
+					),
+					ctx.cwd, state, signal, ui, makeOnStreamEvent,
+				);
+				if (!revisedResult) return state;
+
+				if (revisedResult.data.type === "design" && revisedResult.data.sections?.length > 0) {
+					sections[i] = revisedResult.data.sections[0];
+					appendLog(state, "brainstormer", "design", `Revised section: ${sections[i].title}`);
+				}
+				continue;
+			}
+
+			if (choice === "Revise") {
 				const feedback = await ui?.input?.("What would you like changed?");
 				if (feedback === undefined) return state;
 
@@ -389,14 +441,7 @@ export async function runBrainstormPhase(
 				if (revisionResult.data.type === "design" && revisionResult.data.sections?.length > 0) {
 					sections[i] = revisionResult.data.sections[0];
 				}
-
-				// Re-confirm revised section
-				const revisedTitle = sections[i].title || "(untitled)";
-				const revisedMessage = sections[i].content || "(no content)";
-				const revisedApproved = await ui?.confirm?.(revisedTitle, revisedMessage);
-				if (!revisedApproved) {
-					// Accept anyway — we move forward after one revision
-				}
+				continue;
 			}
 		}
 
