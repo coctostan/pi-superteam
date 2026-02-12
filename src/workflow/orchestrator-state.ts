@@ -5,7 +5,13 @@ import type { TestBaseline } from "./test-baseline.js";
 
 const STATE_FILE = ".superteam-workflow.json";
 
-export type BrainstormStep = "scout" | "questions" | "approaches" | "design" | "done";
+export type BrainstormStep = "scout" | "triage" | "questions" | "approaches" | "design" | "done";
+
+export type ConversationEntry = {
+  role: "brainstormer" | "user";
+  step: BrainstormStep;
+  content: string;
+};
 
 export type BrainstormQuestion = {
   id: string;
@@ -39,6 +45,14 @@ export type BrainstormState = {
   chosenApproach?: string;
   designSections?: DesignSection[];
   currentSectionIndex?: number;
+  conversationLog?: ConversationEntry[];
+  complexityLevel?: "straightforward" | "exploration" | "complex";
+};
+
+export type BatchState = {
+  title: string;
+  description: string;
+  status: "pending" | "active" | "complete";
 };
 
 export type OrchestratorPhase =
@@ -96,6 +110,8 @@ export type OrchestratorState = {
   brainstorm: BrainstormState;
   designPath?: string;
   designContent?: string;
+  batches?: BatchState[];
+  currentBatchIndex?: number;
   planPath?: string;
   planContent?: string;
   tasks: TaskExecState[];

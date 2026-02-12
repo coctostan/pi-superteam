@@ -260,4 +260,107 @@ describe("runWorkflowLoop", () => {
       expect(result.error).toBeUndefined();
     });
   });
+
+  describe("batch looping", () => {
+    it("loops back to plan-write for next batch after execute completes", async () => {
+      const { runWorkflowLoop } = await import("./orchestrator.js");
+      const ctx = makeCtx();
+
+      const state = {
+        phase: "execute",
+        brainstorm: { step: "done" },
+        totalCostUsd: 0,
+        userDescription: "test",
+        tasks: [{ id: 1, title: "T1", status: "complete" }],
+        currentTaskIndex: 0,
+        gitStartingSha: "abc",
+        gitBranch: "feat/test",
+        batches: [
+          { title: "Batch 1", description: "First", status: "active" },
+          { title: "Batch 2", description: "Second", status: "pending" },
+        ],
+        currentBatchIndex: 0,
+      } as any;
+
+      // Execute completes → finalize
+      mockExecute.mockImplementation(async (s) => { s.phase = "finalize"; return s; });
+      // User continues to next batch
+      ctx.ui.select.mockResolvedValueOnce("Continue to next batch");
+      // Plan-write for batch 2 → done
+      mockPlanWrite.mockImplementation(async (s) => { s.phase = "done"; return s; });
+      // Finalize for batch 1
+      mockFinalize.mockImplementation(async (s) => { return { state: s, report: "done" }; });
+
+      const result = await runWorkflowLoop(state, ctx);
+
+      expect(result.currentBatchIndex).toBe(1);
+      expect(result.batches![0].status).toBe("complete");
+      expect(result.batches![1].status).toBe("active");
+    });
+
+    it("stops at finalize when user selects 'Stop here'", async () => {
+      const { runWorkflowLoop } = await import("./orchestrator.js");
+      const ctx = makeCtx();
+
+      const state = {
+        phase: "execute",
+        brainstorm: { step: "done" },
+        totalCostUsd: 0,
+        userDescription: "test",
+        tasks: [],
+        currentTaskIndex: 0,
+        gitStartingSha: "abc",
+        gitBranch: "feat/test",
+        batches: [
+          { title: "Batch 1", description: "First", status: "active" },
+          { title: "Batch 2", description: "Second", status: "pending" },
+        ],
+        currentBatchIndex: 0,
+      } as any;
+
+      mockExecute.mockImplementation(async (s) => { s.phase = "finalize"; return s; });
+      ctx.ui.select.mockResolvedValueOnce("Stop here");
+      mockFinalize.mockImplementation(async (s) => { return { state: s, report: "done" }; });
+
+      const result = await runWorkflowLoop(state, ctx);
+
+      expect(result.phase).toBe("done");
+      expect(result.currentBatchIndex).toBe(0);
+    });
+  });
+
+  describe("queue processing", () => {
+    it("offers to run queued workflows after completion", async () => {
+      const { runWorkflowLoop } = await import("./orchestrator.js");
+      const { enqueueWorkflow, clearQueue } = await import("./workflow-queue.js");
+      const ctx = makeCtx("/tmp/test-queue");
+
+      // Set up queue
+      const fs = await import("node:fs");
+      fs.mkdirSync("/tmp/test-queue", { recursive: true });
+      clearQueue("/tmp/test-queue");
+      enqueueWorkflow("/tmp/test-queue", { title: "Next task", description: "Do next thing" });
+
+      const state = {
+        phase: "finalize",
+        brainstorm: { step: "done" },
+        totalCostUsd: 0,
+        userDescription: "first task",
+        tasks: [],
+        currentTaskIndex: 0,
+        gitStartingSha: "abc",
+        gitBranch: "feat/test",
+      } as any;
+
+      mockFinalize.mockImplementation(async (s) => { return { state: s, report: "done" }; });
+      ctx.ui.select.mockResolvedValue("Stop");
+
+      const result = await runWorkflowLoop(state, ctx);
+      expect(result.phase).toBe("done");
+
+      // Clean up
+      clearQueue("/tmp/test-queue");
+      fs.rmSync("/tmp/test-queue", { recursive: true, force: true });
+    });
+  });
 });

@@ -112,6 +112,30 @@ export async function runWorkflowLoop(
 				state = await runExecutePhase(state, ctx, signal);
 				break;
 			case "finalize": {
+				// Check for remaining batches before finalizing
+				if (state.batches && state.currentBatchIndex !== undefined) {
+					const nextBatch = state.currentBatchIndex + 1;
+					if (nextBatch < state.batches.length) {
+						state.batches[state.currentBatchIndex].status = "complete";
+
+						const batchChoice = await ui?.select?.(
+							`Batch ${state.currentBatchIndex + 1} complete. Continue to batch ${nextBatch + 1}: "${state.batches[nextBatch].title}"?`,
+							["Continue to next batch", "Stop here"],
+						);
+
+						if (batchChoice === "Continue to next batch") {
+							state.currentBatchIndex = nextBatch;
+							state.batches[nextBatch].status = "active";
+							state.tasks = [];
+							state.currentTaskIndex = 0;
+							state.planContent = undefined;
+							state.planPath = undefined;
+							state.phase = "plan-write";
+							break;
+						}
+					}
+				}
+
 				const { state: finalState, report } = await runFinalizePhase(state, ctx, signal);
 				state = finalState;
 				state.phase = "done";

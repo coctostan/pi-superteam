@@ -7,10 +7,12 @@ import type { StreamEvent } from "../dispatch.js";
 // Use a loose type for state to avoid circular dependency
 interface UIState {
 	phase: string;
-	brainstorm?: { step: string };
+	brainstorm?: { step: string; complexityLevel?: string };
 	tasks: Array<{ id?: number; title?: string; status?: string }>;
 	currentTaskIndex: number;
 	totalCostUsd: number;
+	batches?: Array<{ title: string; status: string }>;
+	currentBatchIndex?: number;
 }
 
 /**
@@ -20,7 +22,15 @@ export function formatStatus(state: UIState): string {
 	const parts: string[] = [`⚡ Workflow: ${state.phase}`];
 
 	if (state.phase === "brainstorm" && state.brainstorm) {
-		parts[0] += ` (${state.brainstorm.step})`;
+		let stepInfo = state.brainstorm.step;
+		if (state.brainstorm.complexityLevel) {
+			stepInfo += ` [${state.brainstorm.complexityLevel}]`;
+		}
+		parts[0] += ` (${stepInfo})`;
+	}
+
+	if (state.batches && state.currentBatchIndex !== undefined) {
+		parts.push(`batch ${state.currentBatchIndex + 1}/${state.batches.length}`);
 	}
 
 	if (state.phase === "execute" && state.tasks.length > 0) {

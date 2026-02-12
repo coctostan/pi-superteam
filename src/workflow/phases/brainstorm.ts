@@ -7,7 +7,7 @@
  */
 
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { OrchestratorState, BrainstormQuestion, BrainstormApproach, DesignSection } from "../orchestrator-state.js";
+import type { OrchestratorState, BrainstormQuestion, BrainstormApproach, DesignSection, BrainstormStep } from "../orchestrator-state.js";
 import { discoverAgents, dispatchAgent, getFinalOutput, type AgentProfile, type OnStreamEvent } from "../../dispatch.js";
 import { parseBrainstormOutput } from "../brainstorm-parser.js";
 import {
@@ -16,6 +16,8 @@ import {
 	buildBrainstormApproachesPrompt,
 	buildBrainstormDesignPrompt,
 	buildBrainstormSectionRevisionPrompt,
+	buildBrainstormTriagePrompt,
+	buildBrainstormConversationalPrompt,
 } from "../prompt-builder.js";
 import { formatStatus, formatToolAction, createActivityBuffer } from "../ui.js";
 
@@ -53,24 +55,139 @@ export async function runBrainstormPhase(
 		};
 	};
 
-	// Sub-step: scout (with skip option)
+	// Sub-step: scout
 	if (state.brainstorm.step === "scout") {
-		const skipChoice = await ui?.select?.("Brainstorm explores design options before planning. Continue?", [
-			"Start brainstorm",
-			"Skip brainstorm",
-		]);
-
-		if (skipChoice === "Skip brainstorm") {
-			state.brainstorm.step = "done";
-			state.phase = "plan-write";
-			return state;
-		}
-
 		ui?.setStatus?.("workflow", formatStatus(state));
 		const result = await dispatchAgent(scoutAgent, buildScoutPrompt(ctx.cwd), ctx.cwd, signal, undefined, makeOnStreamEvent());
 		state.totalCostUsd += result.usage.cost;
 		state.brainstorm.scoutOutput = getFinalOutput(result.messages);
-		state.brainstorm.step = "questions";
+		state.brainstorm.step = "triage";
+		state.brainstorm.conversationLog = [];
+	}
+
+	// Sub-step: triage
+	if (state.brainstorm.step === "triage") {
+		ui?.setStatus?.("workflow", formatStatus(state));
+		const scoutOutput = state.brainstorm.scoutOutput || "";
+
+		const triageResult = await dispatchBrainstormerWithRetry(
+			brainstormerAgent,
+			buildBrainstormTriagePrompt(scoutOutput, state.userDescription),
+			ctx.cwd, state, signal, ui, makeOnStreamEvent,
+		);
+		if (!triageResult) return state;
+
+		if (triageResult.data.type !== "triage") {
+			state.error = "Brainstormer returned wrong type for triage step";
+			return state;
+		}
+
+		let currentTriage = triageResult.data;
+		appendLog(state, "brainstormer", "triage", currentTriage.reasoning);
+
+		// Present triage to user — loop for discussion
+		while (true) {
+			const levelLabel = currentTriage.level;
+			const options = buildTriageOptions(levelLabel);
+
+			const triageMessage = formatTriageMessage(currentTriage);
+			ui?.notify?.(triageMessage, "info");
+
+			const choice = await ui?.select?.("Brainstormer assessment", options);
+			if (choice === undefined) return state;
+
+			if (choice.startsWith("Agree")) {
+				state.brainstorm.complexityLevel = currentTriage.level;
+				break;
+			}
+
+			if (choice === "Skip to planning") {
+				state.brainstorm.complexityLevel = currentTriage.level;
+				state.brainstorm.step = "done";
+				state.phase = "plan-write";
+				return state;
+			}
+
+			if (choice === "Discuss") {
+				const comment = await ui?.input?.("Your thoughts on this assessment:");
+				if (comment === undefined) return state;
+				appendLog(state, "user", "triage", comment);
+
+				const revisedResult = await dispatchBrainstormerWithRetry(
+					brainstormerAgent,
+					buildBrainstormConversationalPrompt(
+						{
+							scoutOutput,
+							userDescription: state.userDescription,
+							step: "triage",
+							conversationLog: state.brainstorm.conversationLog,
+						},
+						comment,
+					),
+					ctx.cwd, state, signal, ui, makeOnStreamEvent,
+				);
+				if (!revisedResult) return state;
+
+				if (revisedResult.data.type === "triage") {
+					currentTriage = revisedResult.data;
+					appendLog(state, "brainstormer", "triage", currentTriage.reasoning);
+				}
+				continue;
+			}
+
+			// Override options
+			if (choice.includes("straightforward")) {
+				state.brainstorm.complexityLevel = "straightforward";
+				break;
+			}
+			if (choice.includes("exploration")) {
+				state.brainstorm.complexityLevel = "exploration";
+				break;
+			}
+			if (choice.includes("complex")) {
+				state.brainstorm.complexityLevel = "complex";
+				break;
+			}
+		}
+
+		// Populate splits — enqueue remaining, continue with first
+		if (currentTriage.splits && currentTriage.splits.length > 1) {
+			const { enqueueWorkflow } = await import("../workflow-queue.js");
+			const scoutOutput = state.brainstorm.scoutOutput || "";
+			for (let s = 1; s < currentTriage.splits.length; s++) {
+				enqueueWorkflow(ctx.cwd, {
+					title: currentTriage.splits[s].title,
+					description: currentTriage.splits[s].description,
+					parentScoutOutput: scoutOutput,
+				});
+			}
+			ui?.notify?.(
+				`Split: ${currentTriage.splits.length} independent workflows. Running "${currentTriage.splits[0].title}" first, ${currentTriage.splits.length - 1} queued.`,
+				"info",
+			);
+		}
+
+		// Populate batches if triage suggested them
+		if (currentTriage.batches && currentTriage.batches.length > 0) {
+			state.batches = currentTriage.batches.map((b, i) => ({
+				title: b.title,
+				description: b.description,
+				status: i === 0 ? "active" as const : "pending" as const,
+			}));
+			state.currentBatchIndex = 0;
+		}
+
+		// Determine next step based on complexity
+		const level = state.brainstorm.complexityLevel!;
+		const skips = currentTriage.suggestedSkips || [];
+
+		if (level === "straightforward" && skips.includes("questions") && skips.includes("approaches")) {
+			state.brainstorm.step = "design";
+		} else if (level === "straightforward" && skips.includes("questions")) {
+			state.brainstorm.step = "approaches";
+		} else {
+			state.brainstorm.step = "questions";
+		}
 	}
 
 	// Sub-step: questions
@@ -91,26 +208,65 @@ export async function runBrainstormPhase(
 			return state;
 		}
 
-		const questions = questionsResult.data.questions || [];
-		state.brainstorm.questions = questions;
+		let currentQuestions = questionsResult.data.questions || [];
+		state.brainstorm.questions = currentQuestions;
+		appendLog(state, "brainstormer", "questions", currentQuestions.map((q) => q.text).join("; "));
 
-		// Present each question to user
-		for (let i = 0; i < questions.length; i++) {
-			const q = questions[i];
-			let answer: string | undefined;
+		// Question-answer-discuss loop
+		while (true) {
+			// Present each question to user
+			for (let i = 0; i < currentQuestions.length; i++) {
+				const q = currentQuestions[i];
+				let answer: string | undefined;
 
-			if (q.type === "choice" && q.options && q.options.length > 0) {
-				answer = await ui?.select?.(q.text, q.options);
-			} else {
-				answer = await ui?.input?.(q.text);
+				if (q.type === "choice" && q.options && q.options.length > 0) {
+					answer = await ui?.select?.(q.text, q.options);
+				} else {
+					answer = await ui?.input?.(q.text);
+				}
+
+				if (answer === undefined) {
+					return state;
+				}
+
+				currentQuestions[i].answer = answer;
 			}
 
-			if (answer === undefined) {
-				// User cancelled
-				return state;
+			// Offer discuss/proceed
+			const choice = await ui?.select?.("Questions answered", ["Proceed", "Discuss"]);
+			if (choice === undefined) return state;
+
+			if (choice === "Proceed") break;
+
+			if (choice === "Discuss") {
+				const comment = await ui?.input?.("Your thoughts on these questions:");
+				if (comment === undefined) return state;
+				appendLog(state, "user", "questions", comment);
+
+				const revisedResult = await dispatchBrainstormerWithRetry(
+					brainstormerAgent,
+					buildBrainstormConversationalPrompt(
+						{
+							scoutOutput: state.brainstorm.scoutOutput || "",
+							userDescription: state.userDescription,
+							step: "questions",
+							conversationLog: state.brainstorm.conversationLog,
+						},
+						comment,
+					),
+					ctx.cwd, state, signal, ui, makeOnStreamEvent,
+				);
+				if (!revisedResult) return state;
+
+				if (revisedResult.data.type === "questions") {
+					currentQuestions = revisedResult.data.questions || [];
+					state.brainstorm.questions = currentQuestions;
+					appendLog(state, "brainstormer", "questions", currentQuestions.map((q) => q.text).join("; "));
+				}
+				continue;
 			}
 
-			questions[i].answer = answer;
+			break;
 		}
 
 		state.brainstorm.step = "approaches";
@@ -134,21 +290,71 @@ export async function runBrainstormPhase(
 			return state;
 		}
 
-		const approaches = approachResult.data.approaches || [];
+		let approaches = approachResult.data.approaches || [];
 		state.brainstorm.approaches = approaches;
 		state.brainstorm.recommendation = approachResult.data.recommendation;
+		appendLog(state, "brainstormer", "approaches",
+			`Proposed ${approaches.length} approaches, recommends ${state.brainstorm.recommendation || "none"}`);
 
-		// Present approaches to user
-		const approachTitles = approaches.map((a) => a.title);
-		const chosen = await ui?.select?.("Choose an approach", approachTitles);
+		// Interactive approach menu
+		while (true) {
+			const rec = state.brainstorm.recommendation;
+			const options = [
+				...approaches.map((a) => {
+					const marker = a.id === rec ? " ★" : "";
+					return `${a.title}${marker}`;
+				}),
+				"Discuss",
+				"Go back to questions",
+			];
 
-		if (chosen === undefined) {
-			return state; // cancelled
+			const choice = await ui?.select?.("Choose an approach", options);
+			if (choice === undefined) return state;
+
+			if (choice === "Go back to questions") {
+				state.brainstorm.step = "questions";
+				state.brainstorm.approaches = [];
+				return state;
+			}
+
+			if (choice === "Discuss") {
+				const comment = await ui?.input?.("Your thoughts on these approaches:");
+				if (comment === undefined) return state;
+				appendLog(state, "user", "approaches", comment);
+
+				const revisedResult = await dispatchBrainstormerWithRetry(
+					brainstormerAgent,
+					buildBrainstormConversationalPrompt(
+						{
+							scoutOutput,
+							userDescription: state.userDescription,
+							step: "approaches",
+							conversationLog: state.brainstorm.conversationLog,
+							questions: qa,
+						},
+						comment,
+					),
+					ctx.cwd, state, signal, ui, makeOnStreamEvent,
+				);
+				if (!revisedResult) return state;
+
+				if (revisedResult.data.type === "approaches") {
+					approaches = revisedResult.data.approaches || [];
+					state.brainstorm.approaches = approaches;
+					state.brainstorm.recommendation = revisedResult.data.recommendation;
+					appendLog(state, "brainstormer", "approaches",
+						`Revised to ${approaches.length} approaches`);
+				}
+				continue;
+			}
+
+			// User picked an approach
+			const chosenTitle = choice.replace(/ ★$/, "");
+			const chosenApproach = approaches.find((a) => a.title === chosenTitle);
+			state.brainstorm.chosenApproach = chosenApproach?.id || approaches[0]?.id;
+			state.brainstorm.step = "design";
+			break;
 		}
-
-		const chosenApproach = approaches.find((a) => a.title === chosen);
-		state.brainstorm.chosenApproach = chosenApproach?.id || approaches[0]?.id;
-		state.brainstorm.step = "design";
 	}
 
 	// Sub-step: design
@@ -160,15 +366,19 @@ export async function runBrainstormPhase(
 		const chosenId = state.brainstorm.chosenApproach;
 		const chosenApproach = approaches.find((a) => a.id === chosenId) || approaches[0];
 
-		if (!chosenApproach) {
-			state.error = "No approach selected for design step";
-			return state;
-		}
+		// For straightforward path without approach selection, use a synthetic approach
+		const effectiveApproach = chosenApproach || {
+			id: "direct",
+			title: "Direct implementation",
+			summary: state.userDescription,
+			tradeoffs: "None — straightforward change",
+			taskEstimate: 1,
+		};
 
 		// Dispatch brainstormer for design
 		const designResult = await dispatchBrainstormerWithRetry(
 			brainstormerAgent,
-			buildBrainstormDesignPrompt(scoutOutput, state.userDescription, qa, chosenApproach),
+			buildBrainstormDesignPrompt(scoutOutput, state.userDescription, qa, effectiveApproach),
 			ctx.cwd, state, signal, ui, makeOnStreamEvent,
 		);
 		if (!designResult) return state;
@@ -179,20 +389,72 @@ export async function runBrainstormPhase(
 		}
 
 		let sections = designResult.data.sections || [];
+		appendLog(state, "brainstormer", "design", `Generated ${sections.length} design sections`);
 
-		// Present each section for approval
-		for (let i = 0; i < sections.length; i++) {
+		// Present each section with menu
+		let i = 0;
+		while (i < sections.length) {
 			const section = sections[i];
 			const title = section.title || "(untitled)";
-			const message = section.content || "(no content)";
-			const approved = await ui?.confirm?.(title, message);
+			const content = section.content || "(no content)";
 
-			if (approved === undefined) {
-				return state; // cancelled
+			const menuOptions = ["Approve", "Revise", "Discuss"];
+			if (i > 0) menuOptions.push("Go back to previous section");
+			menuOptions.push("Go back to approaches");
+
+			ui?.notify?.(`## ${title}\n\n${content}`, "info");
+
+			const choice = await ui?.select?.(title, menuOptions);
+			if (choice === undefined) return state;
+
+			if (choice === "Approve") {
+				i++;
+				continue;
 			}
 
-			if (!approved) {
-				// Get feedback and dispatch revision
+			if (choice === "Go back to previous section") {
+				i = Math.max(0, i - 1);
+				continue;
+			}
+
+			if (choice === "Go back to approaches") {
+				state.brainstorm.step = "approaches";
+				state.brainstorm.approaches = [];
+				state.brainstorm.designSections = [];
+				return state;
+			}
+
+			if (choice === "Discuss") {
+				const comment = await ui?.input?.("Your thoughts on this section:");
+				if (comment === undefined) return state;
+				appendLog(state, "user", "design", `[${title}] ${comment}`);
+
+				const revisedResult = await dispatchBrainstormerWithRetry(
+					brainstormerAgent,
+					buildBrainstormConversationalPrompt(
+						{
+							scoutOutput,
+							userDescription: state.userDescription,
+							step: "design",
+							conversationLog: state.brainstorm.conversationLog,
+							questions: qa,
+							approaches,
+							chosenApproach: chosenId,
+						},
+						`Regarding section "${title}": ${comment}`,
+					),
+					ctx.cwd, state, signal, ui, makeOnStreamEvent,
+				);
+				if (!revisedResult) return state;
+
+				if (revisedResult.data.type === "design" && revisedResult.data.sections?.length > 0) {
+					sections[i] = revisedResult.data.sections[0];
+					appendLog(state, "brainstormer", "design", `Revised section: ${sections[i].title}`);
+				}
+				continue;
+			}
+
+			if (choice === "Revise") {
 				const feedback = await ui?.input?.("What would you like changed?");
 				if (feedback === undefined) return state;
 
@@ -206,14 +468,7 @@ export async function runBrainstormPhase(
 				if (revisionResult.data.type === "design" && revisionResult.data.sections?.length > 0) {
 					sections[i] = revisionResult.data.sections[0];
 				}
-
-				// Re-confirm revised section
-				const revisedTitle = sections[i].title || "(untitled)";
-				const revisedMessage = sections[i].content || "(no content)";
-				const revisedApproved = await ui?.confirm?.(revisedTitle, revisedMessage);
-				if (!revisedApproved) {
-					// Accept anyway — we move forward after one revision
-				}
+				continue;
 			}
 		}
 
@@ -274,6 +529,36 @@ async function dispatchBrainstormerWithRetry(
 		state.error = "Brainstorm output parsing failed after retries";
 	}
 	return null;
+}
+
+function appendLog(state: OrchestratorState, role: "brainstormer" | "user", step: BrainstormStep, content: string): void {
+	if (!state.brainstorm.conversationLog) state.brainstorm.conversationLog = [];
+	state.brainstorm.conversationLog.push({ role, step, content });
+}
+
+function buildTriageOptions(level: string): string[] {
+	const options = [`Agree — ${level}`, "Discuss", "Skip to planning"];
+	if (level !== "straightforward") options.splice(2, 0, "Override — straightforward");
+	if (level !== "exploration") options.splice(options.length - 1, 0, "Override — exploration");
+	if (level !== "complex") options.splice(options.length - 1, 0, "Override — complex");
+	return options;
+}
+
+function formatTriageMessage(triage: any): string {
+	const lines = [`Complexity: ${triage.level}`, triage.reasoning];
+	if (triage.batches?.length > 0) {
+		lines.push("", "Suggested batches:");
+		for (const b of triage.batches) {
+			lines.push(`  • ${b.title}: ${b.description}`);
+		}
+	}
+	if (triage.splits?.length > 0) {
+		lines.push("", "Suggested splits:");
+		for (const s of triage.splits) {
+			lines.push(`  • ${s.title}: ${s.description}`);
+		}
+	}
+	return lines.join("\n");
 }
 
 function assembleDesignDoc(title: string, sections: DesignSection[]): string {

@@ -1,5 +1,5 @@
 // src/workflow/phases/brainstorm.acceptance.test.ts
-// Acceptance tests for Bug 3 (status bar never updates) and Bug 4 (confirm dialog "undefined")
+// Acceptance tests for status bar updates, design section presentation, and triage integration
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -87,15 +87,18 @@ describe("Brainstorm phase acceptance tests", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("AT-7: setStatus is called with strings containing each sub-step name (scout, questions, approaches, design)", async () => {
+  it("AT-7: setStatus is called with strings containing each sub-step name (scout, triage, questions, approaches, design)", async () => {
     const { runBrainstormPhase } = await import("./brainstorm.js");
     const ctx = makeCtx(tmpDir);
 
     mockDispatchAgent.mockResolvedValue(makeDispatchResult());
     mockGetFinalOutput.mockReturnValue("scout output");
 
-    // Parse calls return questions, then approaches, then design — in order
     mockParseBrainstorm
+      .mockReturnValueOnce({
+        status: "ok",
+        data: { type: "triage", level: "exploration", reasoning: "Design choices exist" },
+      } as any)
       .mockReturnValueOnce({
         status: "ok",
         data: {
@@ -120,29 +123,27 @@ describe("Brainstorm phase acceptance tests", () => {
         },
       } as any);
 
-    // User chooses to start brainstorm (skip prompt)
-    ctx.ui.select.mockResolvedValueOnce("Start brainstorm");
-    // User answers the question
-    ctx.ui.input.mockResolvedValueOnce("OAuth2");
-    // User picks the approach
-    ctx.ui.select.mockResolvedValueOnce("Approach A");
-    // User approves the design section
-    ctx.ui.confirm.mockResolvedValueOnce(true);
+    ctx.ui.select
+      .mockResolvedValueOnce("Agree — exploration")  // triage
+      .mockResolvedValueOnce("Proceed")               // after questions
+      .mockResolvedValueOnce("Approach A")            // approach selection
+      .mockResolvedValueOnce("Approve");              // approve design
+    ctx.ui.input.mockResolvedValueOnce("OAuth2");     // question answer
 
     const state = makeState({ brainstorm: { step: "scout" } });
     await runBrainstormPhase(state, ctx);
 
-    // Collect all status strings
     const statusCalls = ctx.ui.setStatus.mock.calls.map((c: any[]) => c.join(" ").toLowerCase());
     const allStatusText = statusCalls.join(" ");
 
     expect(allStatusText).toContain("scout");
+    expect(allStatusText).toContain("triage");
     expect(allStatusText).toContain("questions");
     expect(allStatusText).toContain("approach");
     expect(allStatusText).toContain("design");
   });
 
-  it("AT-8: ui.confirm is called with at least 2 arguments (title + body) for design sections", async () => {
+  it("AT-8: design sections are presented via notify with title and content, select for approval", async () => {
     const { runBrainstormPhase } = await import("./brainstorm.js");
     const ctx = makeCtx(tmpDir);
 
@@ -157,7 +158,7 @@ describe("Brainstorm phase acceptance tests", () => {
       },
     } as any);
 
-    ctx.ui.confirm.mockResolvedValueOnce(true);
+    ctx.ui.select.mockResolvedValueOnce("Approve");
 
     const state = makeState({
       brainstorm: {
@@ -166,24 +167,25 @@ describe("Brainstorm phase acceptance tests", () => {
         questions: [{ id: "q1", text: "Q?", type: "input", answer: "A" }],
         chosenApproach: "a1",
         approaches: [{ id: "a1", title: "Approach A", summary: "S", tradeoffs: "T", taskEstimate: 3 }],
+        conversationLog: [],
+        complexityLevel: "exploration",
       },
     });
 
     await runBrainstormPhase(state, ctx);
 
-    // ui.confirm must have been called
-    expect(ctx.ui.confirm).toHaveBeenCalled();
+    // ui.notify should show the section content
+    const notifyCalls = ctx.ui.notify.mock.calls.map((c: any[]) => c.join(" "));
+    const allNotifyText = notifyCalls.join(" ");
+    expect(allNotifyText).toContain("Architecture");
+    expect(allNotifyText).toContain("The system uses microservices");
 
-    const firstCall = ctx.ui.confirm.mock.calls[0];
-
-    // confirm should be called with at least 2 arguments: title and body
-    expect(firstCall.length).toBeGreaterThanOrEqual(2);
-    expect(firstCall[0]).toBeTruthy(); // non-empty title
-    expect(firstCall[1]).toBeDefined();
-    expect(String(firstCall[1])).not.toBe("undefined");
+    // ui.select should be called with section title
+    const selectCalls = ctx.ui.select.mock.calls.map((c: any[]) => c[0]);
+    expect(selectCalls.some((s: string) => s.includes("Architecture"))).toBe(true);
   });
 
-  it("AT-9: when section title/content are empty strings, confirm args contain fallbacks and no 'undefined'", async () => {
+  it("AT-9: when section title/content are empty strings, notify/select contain fallbacks and no 'undefined'", async () => {
     const { runBrainstormPhase } = await import("./brainstorm.js");
     const ctx = makeCtx(tmpDir);
 
@@ -198,7 +200,7 @@ describe("Brainstorm phase acceptance tests", () => {
       },
     } as any);
 
-    ctx.ui.confirm.mockResolvedValueOnce(true);
+    ctx.ui.select.mockResolvedValueOnce("Approve");
 
     const state = makeState({
       brainstorm: {
@@ -207,21 +209,17 @@ describe("Brainstorm phase acceptance tests", () => {
         questions: [{ id: "q1", text: "Q?", type: "input", answer: "A" }],
         chosenApproach: "a1",
         approaches: [{ id: "a1", title: "Approach A", summary: "S", tradeoffs: "T", taskEstimate: 3 }],
+        conversationLog: [],
+        complexityLevel: "exploration",
       },
     });
 
     await runBrainstormPhase(state, ctx);
 
-    expect(ctx.ui.confirm).toHaveBeenCalled();
-
-    const firstCall = ctx.ui.confirm.mock.calls[0];
-    const allArgs = firstCall.map(String).join(" ");
-
-    // Must not contain the literal string "undefined"
-    expect(allArgs).not.toContain("undefined");
-
-    // Must contain fallback text for missing title and content
-    expect(allArgs).toMatch(/\(untitled\)/i);
-    expect(allArgs).toMatch(/\(no content\)/i);
+    const notifyCalls = ctx.ui.notify.mock.calls.map((c: any[]) => c.join(" "));
+    const allNotifyText = notifyCalls.join(" ");
+    expect(allNotifyText).not.toContain("undefined");
+    expect(allNotifyText).toContain("(untitled)");
+    expect(allNotifyText).toContain("(no content)");
   });
 });

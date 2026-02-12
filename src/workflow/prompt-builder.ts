@@ -203,7 +203,7 @@ export function buildFinalReviewPrompt(completedTasks: TaskExecState[], changedF
 
 // --- Brainstorm ---
 
-import type { BrainstormQuestion, BrainstormApproach, DesignSection } from "./orchestrator-state.js";
+import type { BrainstormQuestion, BrainstormApproach, DesignSection, ConversationEntry, BrainstormStep } from "./orchestrator-state.js";
 
 export function buildBrainstormQuestionsPrompt(scoutOutput: string, userDescription: string): string {
 	return [
@@ -384,6 +384,117 @@ export function buildTargetedPlanRevisionPrompt(
 		`## Review findings`,
 		findings,
 	].join("\n");
+}
+
+// --- Brainstorm triage ---
+
+export function buildBrainstormTriagePrompt(scoutOutput: string, userDescription: string): string {
+	return [
+		`## Task: Assess complexity and scope`,
+		``,
+		`The user wants: ${userDescription}`,
+		``,
+		`## Project context (from scout)`,
+		scoutOutput,
+		``,
+		`## Instructions`,
+		`Assess this change request and classify its complexity:`,
+		``,
+		`- **straightforward** — Focused change, clear path, no design choices. Skip questions and approaches.`,
+		`- **exploration** — Meaningful design choices exist. Normal brainstorm flow.`,
+		`- **complex** — Multiple systems, competing tradeoffs. Deeper exploration with more questions.`,
+		``,
+		`If the scope is broad but cohesive, propose **batches** — sequential chunks that each get their own plan-execute cycle.`,
+		`If the scope contains genuinely independent pieces, propose **splits** — separate workflow runs.`,
+		``,
+		`Return a \`\`\`superteam-brainstorm block with type "triage":`,
+		`{`,
+		`  "type": "triage",`,
+		`  "level": "straightforward" | "exploration" | "complex",`,
+		`  "reasoning": "Why this level",`,
+		`  "suggestedSkips": ["questions", "approaches"],  // optional, for straightforward`,
+		`  "batches": [{"title": "...", "description": "..."}],  // optional, for broad scope`,
+		`  "splits": [{"title": "...", "description": "..."}]    // optional, for independent pieces`,
+		`}`,
+		``,
+		`IMPORTANT: In your JSON output, never use literal newlines inside string values. Use \\n escape sequences instead.`,
+	].join("\n");
+}
+
+// --- Brainstorm conversational ---
+
+const CONVERSATION_WORD_CAP = 3000;
+
+export function buildBrainstormConversationalPrompt(
+	state: {
+		scoutOutput?: string;
+		userDescription: string;
+		step: BrainstormStep;
+		conversationLog?: ConversationEntry[];
+		questions?: BrainstormQuestion[];
+		approaches?: BrainstormApproach[];
+		chosenApproach?: string;
+	},
+	userComment: string,
+): string {
+	const parts: string[] = [
+		`## Task: Revise ${state.step} based on discussion`,
+		``,
+		`The user wants: ${state.userDescription}`,
+		``,
+	];
+
+	if (state.scoutOutput) {
+		parts.push(`## Project context (from scout)`, state.scoutOutput, ``);
+	}
+
+	// Current answers if in approaches or design step
+	if (state.questions && state.questions.length > 0) {
+		const qaLines = state.questions
+			.filter((q) => q.answer)
+			.map((q) => `- **${q.text}** → ${q.answer}`);
+		if (qaLines.length > 0) {
+			parts.push(`## Current answers`, ...qaLines, ``);
+		}
+	}
+
+	if (state.chosenApproach && state.approaches) {
+		const chosen = state.approaches.find((a) => a.id === state.chosenApproach);
+		if (chosen) {
+			parts.push(`## Chosen approach`, `**${chosen.title}** — ${chosen.summary}`, ``);
+		}
+	}
+
+	// Conversation history — filtered to current step, capped
+	const log = (state.conversationLog || []).filter((e) => e.step === state.step);
+	if (log.length > 0) {
+		parts.push(`## Conversation`);
+		let wordCount = 0;
+		for (const entry of log) {
+			const entryWords = entry.content.split(/\s+/).length;
+			if (wordCount + entryWords > CONVERSATION_WORD_CAP) {
+				parts.push(`(earlier conversation truncated)`);
+				break;
+			}
+			const label = entry.role === "brainstormer" ? "Brainstormer" : "User";
+			parts.push(`**${label}:** ${entry.content}`);
+			wordCount += entryWords;
+		}
+		parts.push(``);
+	}
+
+	parts.push(
+		`## User's latest comment`,
+		userComment,
+		``,
+		`## Instructions`,
+		`Revise your ${state.step} output based on the conversation above and the user's latest comment.`,
+		`Return a \`\`\`superteam-brainstorm block with the appropriate type.`,
+		``,
+		`IMPORTANT: In your JSON output, never use literal newlines inside string values. Use \\n escape sequences instead.`,
+	);
+
+	return parts.join("\n");
 }
 
 // --- Utilities ---

@@ -55,7 +55,26 @@ export interface DesignPayload {
 	sections: DesignSection[];
 }
 
-export type BrainstormPayload = QuestionsPayload | ApproachesPayload | DesignPayload;
+export interface TriageBatch {
+	title: string;
+	description: string;
+}
+
+export interface TriageSplit {
+	title: string;
+	description: string;
+}
+
+export interface TriagePayload {
+	type: "triage";
+	level: "straightforward" | "exploration" | "complex";
+	reasoning: string;
+	suggestedSkips?: string[];
+	batches?: TriageBatch[];
+	splits?: TriageSplit[];
+}
+
+export type BrainstormPayload = QuestionsPayload | ApproachesPayload | DesignPayload | TriagePayload;
 
 export type BrainstormParseResult =
 	| { status: "ok"; data: BrainstormPayload }
@@ -111,7 +130,7 @@ export function parseBrainstormOutput(rawOutput: string): BrainstormParseResult 
 	};
 }
 
-const VALID_TYPES = ["questions", "approaches", "design"];
+const VALID_TYPES = ["triage", "questions", "approaches", "design"];
 
 function parseAndValidate(jsonStr: string, rawOutput: string): BrainstormParseResult {
 	let parsed: any;
@@ -142,6 +161,8 @@ function parseAndValidate(jsonStr: string, rawOutput: string): BrainstormParseRe
 	}
 
 	switch (parsed.type) {
+		case "triage":
+			return validateTriage(parsed, rawOutput);
 		case "questions":
 			return validateQuestions(parsed, rawOutput);
 		case "approaches":
@@ -151,6 +172,36 @@ function parseAndValidate(jsonStr: string, rawOutput: string): BrainstormParseRe
 		default:
 			return { status: "error", rawOutput, parseError: `Unknown type: ${parsed.type}` };
 	}
+}
+
+const VALID_TRIAGE_LEVELS = ["straightforward", "exploration", "complex"];
+
+function validateTriage(parsed: any, rawOutput: string): BrainstormParseResult {
+	const level = VALID_TRIAGE_LEVELS.includes(parsed.level) ? parsed.level : "exploration";
+	const reasoning = typeof parsed.reasoning === "string" ? parsed.reasoning : "";
+
+	const suggestedSkips = Array.isArray(parsed.suggestedSkips)
+		? parsed.suggestedSkips.filter((s: unknown) => typeof s === "string")
+		: undefined;
+
+	const batches = Array.isArray(parsed.batches)
+		? parsed.batches.map((b: any) => ({
+				title: typeof b.title === "string" ? b.title : "",
+				description: typeof b.description === "string" ? b.description : "",
+			}))
+		: undefined;
+
+	const splits = Array.isArray(parsed.splits)
+		? parsed.splits.map((s: any) => ({
+				title: typeof s.title === "string" ? s.title : "",
+				description: typeof s.description === "string" ? s.description : "",
+			}))
+		: undefined;
+
+	return {
+		status: "ok",
+		data: { type: "triage", level, reasoning, suggestedSkips, batches, splits },
+	};
 }
 
 function validateQuestions(parsed: any, rawOutput: string): BrainstormParseResult {

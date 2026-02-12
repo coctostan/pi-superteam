@@ -270,6 +270,70 @@ describe("orchestrator-state", () => {
     });
   });
 
+  describe("conversationLog and complexityLevel", () => {
+    it("BrainstormState accepts conversationLog entries", () => {
+      const bs: BrainstormState = {
+        step: "scout",
+        conversationLog: [
+          { role: "brainstormer", step: "questions", content: "Here are my questions" },
+          { role: "user", step: "questions", content: "Question 2 doesn't apply" },
+        ],
+      };
+      expect(bs.conversationLog).toHaveLength(2);
+      expect(bs.conversationLog![0].role).toBe("brainstormer");
+      expect(bs.conversationLog![1].role).toBe("user");
+    });
+
+    it("BrainstormState accepts complexityLevel", () => {
+      const bs: BrainstormState = { step: "triage", complexityLevel: "straightforward" };
+      expect(bs.complexityLevel).toBe("straightforward");
+      bs.complexityLevel = "exploration";
+      expect(bs.complexityLevel).toBe("exploration");
+      bs.complexityLevel = "complex";
+      expect(bs.complexityLevel).toBe("complex");
+    });
+
+    it("conversationLog round-trips through save/load", () => {
+      const state = createInitialState("test");
+      state.brainstorm.conversationLog = [
+        { role: "brainstormer", step: "triage", content: "This looks straightforward" },
+        { role: "user", step: "triage", content: "I agree" },
+      ];
+      state.brainstorm.complexityLevel = "straightforward";
+      saveState(state, tmpDir);
+      const loaded = loadState(tmpDir);
+      expect(loaded!.brainstorm.conversationLog).toHaveLength(2);
+      expect(loaded!.brainstorm.complexityLevel).toBe("straightforward");
+    });
+  });
+
+  describe("batch state fields", () => {
+    it("OrchestratorState accepts batches and currentBatchIndex", () => {
+      const state = createInitialState("test");
+      (state as any).batches = [
+        { title: "Batch 1", description: "Infrastructure", status: "pending" },
+        { title: "Batch 2", description: "Wiring", status: "pending" },
+      ];
+      (state as any).currentBatchIndex = 0;
+      expect((state as any).batches).toHaveLength(2);
+      expect((state as any).currentBatchIndex).toBe(0);
+    });
+
+    it("batches round-trip through save/load", () => {
+      const state = createInitialState("test");
+      (state as any).batches = [
+        { title: "B1", description: "D1", status: "complete" },
+        { title: "B2", description: "D2", status: "pending" },
+      ];
+      (state as any).currentBatchIndex = 1;
+      saveState(state, tmpDir);
+      const loaded = loadState(tmpDir);
+      expect((loaded as any).batches).toHaveLength(2);
+      expect((loaded as any).batches[0].status).toBe("complete");
+      expect((loaded as any).currentBatchIndex).toBe(1);
+    });
+  });
+
   describe("updated state model", () => {
     it("createInitialState starts in brainstorm phase", () => {
       const state = createInitialState("Build auth");
