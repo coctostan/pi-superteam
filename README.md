@@ -39,8 +39,9 @@ If you want a lighter-weight setup, use:
 - This project is in **sunset mode**: **no new features, no bug fixes, no security updates**.
 - Issues/PRs may be closed without action.
 - If you currently depend on it, **pin** to a known-good version and/or **fork** this repo.
+- Plan: this repository will be **archived** after the sunset PR is merged.
 
-This repository may be archived/read-only in the future. See [DEPRECATED.md](DEPRECATED.md) for details.
+See [DEPRECATED.md](DEPRECATED.md) for details.
 
 ## What is this?
 
