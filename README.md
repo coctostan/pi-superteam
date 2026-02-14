@@ -30,10 +30,17 @@
 
 If you want a lighter-weight setup, use:
 
-- **pi-superpowers** — https://www.npmjs.com/package/pi-superpowers
-- **pi-superpowers-plus** — https://www.npmjs.com/package/pi-superpowers-plus (adapted for Obra/Superpowers users coming to pi)
+- **pi-superpowers** — npm: https://www.npmjs.com/package/pi-superpowers · GitHub: https://github.com/coctostan/pi-superpowers
+- **pi-superpowers-plus** — npm: https://www.npmjs.com/package/pi-superpowers-plus · GitHub: https://github.com/coctostan/pi-superpowers-plus
+  - Adapted for Obra/Superpowers users coming to pi
 
-This repository may be archived/read-only in the future. If you rely on this package, consider forking and pinning a known-good version. See [DEPRECATED.md](DEPRECATED.md) for details.
+### What this means
+
+- This project is in **sunset mode**: **no new features, no bug fixes, no security updates**.
+- Issues/PRs may be closed without action.
+- If you currently depend on it, **pin** to a known-good version and/or **fork** this repo.
+
+This repository may be archived/read-only in the future. See [DEPRECATED.md](DEPRECATED.md) for details.
 
 ## What is this?
 

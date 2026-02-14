@@ -12,8 +12,12 @@ I’m sunsetting **pi-superteam**. It turned out to be overly ambitious and ulti
 
 If you want a lighter-weight approach, use one of these instead:
 
-- **pi-superpowers**: https://www.npmjs.com/package/pi-superpowers
-- **pi-superpowers-plus**: https://www.npmjs.com/package/pi-superpowers-plus
+- **pi-superpowers**
+  - npm: https://www.npmjs.com/package/pi-superpowers
+  - GitHub: https://github.com/coctostan/pi-superpowers
+- **pi-superpowers-plus**
+  - npm: https://www.npmjs.com/package/pi-superpowers-plus
+  - GitHub: https://github.com/coctostan/pi-superpowers-plus
   - Adapted for Obra/Superpowers users coming to pi
 
 ## What to do if you currently depend on pi-superteam
