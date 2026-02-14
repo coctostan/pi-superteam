@@ -18,6 +18,23 @@
 
 ---
 
+## ⚠️ Project status: DEPRECATED (sunset)
+
+**pi-superteam is deprecated and no longer maintained.** It is overly ambitious and ultimately misses the mark, so I’m sunsetting it.
+
+- No new features
+- No bug fixes
+- No security updates
+
+### Recommended alternatives
+
+If you want a lighter-weight setup, use:
+
+- **pi-superpowers** — https://www.npmjs.com/package/pi-superpowers
+- **pi-superpowers-plus** — https://www.npmjs.com/package/pi-superpowers-plus (adapted for Obra/Superpowers users coming to pi)
+
+This repository may be archived/read-only in the future. If you rely on this package, consider forking and pinning a known-good version. See [DEPRECATED.md](DEPRECATED.md) for details.
+
 ## What is this?
 
 **pi-superteam** turns your pi agent into a development team. Instead of one AI doing everything, you get specialized agents — a scout that explores code, an implementer that writes tests first, reviewers that catch bugs — all coordinated automatically.

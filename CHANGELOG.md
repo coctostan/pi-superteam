@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 (2026-02-14)
+
+### Deprecated
+
+- Marked the project as deprecated/sunset. README updated with migration pointers to `pi-superpowers` and `pi-superpowers-plus`.
+- Added `DEPRECATED.md`.
+- Updated npm metadata (description/keywords) to reflect deprecation.
+
 ## 0.3.0 (2026-02-09)
 
 ### Breaking Changes
